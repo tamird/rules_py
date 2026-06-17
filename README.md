@@ -80,8 +80,10 @@ correct toolchain selection in RBE environments.
 
 ### Idiomatic `site-packages` Layout
 
-We do not manipulate `sys.path` or `$PYTHONPATH`. Instead, we generate a standard `site-packages` directory structure
-using symlink trees:
+Most targets use symlink trees to provide a standard `site-packages` directory without relying on `$PYTHONPATH`.
+Under manifest-only runfiles, rules_py instead appends opaque `sys.path` entries for the configured import roots. A path
+hook maps those entries to manifest finders that support imports, `pkgutil` discovery, and regular-package resources.
+Manifest-only namespace packages do not expose package resources.
 
 - Prevents module name collisions (e.g., standard library `collections` vs. a transitive dependency named `collections`)
 - Matches standard Python expectations—tools just work
