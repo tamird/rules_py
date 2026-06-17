@@ -3,8 +3,9 @@
 This module is the single place in rules_py that declares the files making
 up a Python venv. Both `py_binary` / `py_test` (each with its own internal
 venv, unless `expose_venv = True` routes them to a sibling py_venv) and
-the standalone `py_venv` rule call `assemble_venv` to keep their layouts
-bit-identical.
+the standalone `py_venv` rule call `assemble_venv`. Ordinary targets use
+runfiles-relative wheel links; physical `py_venv` targets add wheel aliases
+so their bazel-bin trees remain usable by IDEs.
 
 The venv shape mirrors what CPython's `python -m venv` + pip install
 produces, so downstream tools (IDEs, `$VIRTUAL_ENV`-aware shells,
@@ -12,7 +13,6 @@ distutils, etc.) treat it as a real venv:
 
     <venv_name>/
       pyvenv.cfg
-      _merged/<package_root>/<package_root>        cross-wheel regular package
       bin/
         python                                    standalone wrapper or launcher
         python3                                 symlink -> python
@@ -51,7 +51,7 @@ case $0 in
     */*) script_dir=${{0%/*}} ;;
     *) script_dir=. ;;
 esac
-exec "${{script_dir}}/python" -c 'import sys; from {module} import {func}; sys.argv[0] = "{name}"; sys.exit({func}())' "$@"
+exec "${{script_dir}}/python" -c 'import sys; from importlib import import_module; from operator import attrgetter; sys.argv[0] = "{name}"; sys.exit(attrgetter("{func}")(import_module("{module}"))())' "$@"
 """
 
 def _dict_to_exports(env):
@@ -136,12 +136,15 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
     for w in wheels:
         wheel_by_sp[w.site_packages_rfpath] = w
         ns_set = {tl: True for tl in getattr(w, "namespace_top_levels", ())}
+        directory_set = {tl: True for tl in getattr(w, "directory_top_levels", ())}
         ns_entries_by_tl = {}
         for entry in getattr(w, "namespace_entries", ()):
             ns_entries_by_tl.setdefault(entry.split("/")[0], []).append(entry)
         for tl in w.top_levels:
             tl_claimants.setdefault(tl, []).append(struct(
                 site_packages = w.site_packages_rfpath,
+                is_directory = tl in directory_set,
+                topology_known = getattr(w, "topology_known", True),
                 is_ns = tl in ns_set,
                 ns_entries = tuple(ns_entries_by_tl.get(tl, [])),
             ))
@@ -178,6 +181,14 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
             top_level_to_site_pkgs[tl] = claimants[0].site_packages
             continue
 
+        if (
+            all([c.is_directory for c in distinct_sp.values()]) and
+            not all([c.topology_known for c in distinct_sp.values()])
+        ):
+            for c in distinct_sp.values():
+                skipped_per_wheel.setdefault(c.site_packages, {})[tl] = True
+            continue
+
         all_namespace = all([c.is_ns for c in claimants])
         if all_namespace:
             # Deep-overlap scan first: a regular root of one claimant
@@ -187,8 +198,7 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
             # azure-core-tracing-opentelemetry). Python locks a regular
             # package's __path__ to one directory, so neither .pth nor a
             # per-entry symlink can merge it — collect the roots for the
-            # physical merge in pass 2a, and record every all-namespace
-            # claimant sp.
+            # physical merge in pass 2a.
             tl_prefix = tl + "/"
             required_site_packages = {}
             for sp_a in distinct_sp.keys():
@@ -207,12 +217,12 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
 
             unique_claimants = distinct_sp.values()
 
-            # When a regular package spans wheels under this top-level the
-            # physical merge (pass 2a -> merge_groups) owns the conflicted
-            # subtree and the remaining namespace portions fall through to
-            # .pth. Don't ALSO lay per-entry symlinks for this top-level:
-            # they'd collide with the merged directory and can't represent
-            # a regular package anyway.
+            # One physical merge owns the complete top-level whenever a
+            # regular package spans wheels below it. Include every claimant
+            # with an install tree so unrelated namespace portions remain
+            # visible to static tools and no sibling action shares the output
+            # directory. An unrelated legacy claimant can remain on .pth, but
+            # a claimant involved in the conflict must be materialized.
             if required_site_packages:
                 materialized = []
                 missing_required = []
@@ -328,7 +338,7 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
 
     # Pass 2a: one concrete output per conflicted top-level namespace. Merging
     # every claimant preserves unrelated namespace portions for static tools
-    # and avoids nested outputs below an undeclared parent directory.
+    # and avoids sibling actions materializing a shared parent directory.
     merge_groups = [conflicted_top_levels[root] for root in sorted(conflicted_top_levels.keys())]
 
     # Pass 2b: console scripts.
@@ -352,6 +362,8 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
     # namespace) symlinks.
     fully_covered = {}
     for w in wheels:
+        if not w.top_levels:
+            continue
         skipped = skipped_per_wheel.get(w.site_packages_rfpath, {})
         ns_covered = ns_covered_per_wheel.get(w.site_packages_rfpath, {})
         covered = True
@@ -385,6 +397,7 @@ def assemble_venv(
         include_system_site_packages = False,
         include_user_site_packages = False,
         default_env = {},
+        materialize_wheel_tree_aliases,
         launcher_bootstrap_py,
         python_wrapper_tmpl,
         standalone_interpreter,
@@ -404,14 +417,16 @@ def assemble_venv(
       imports_depset: Depset of first-party + transitive wheel import
         paths (as returned by py_library_utils.make_imports_depset).
       package_collisions: "error" / "warning" / "ignore" — policy applied
-        when two wheels claim the same top-level (non-namespace case) or
-        the same console-script name.
+        when two wheels claim the same non-directory top-level or the same
+        console-script name.
       include_system_site_packages: Value for pyvenv.cfg's
         `include-system-site-packages` key.
       include_user_site_packages: Value for the Aspect extension
         `aspect-include-user-site-packages` key.
       default_env: Dict of env-var name → value. Exported at the top of
         the generated activate script and unset in `deactivate`.
+      materialize_wheel_tree_aliases: Whether to project wheel install trees
+        under the venv so its bazel-bin form remains usable by IDEs.
       launcher_bootstrap_py: File — bootstrap that restores venv identity after
         the native launcher resolves the PBS interpreter through runfiles.
       python_wrapper_tmpl: File — standalone bin/python wrapper template.
@@ -441,6 +456,10 @@ def assemble_venv(
         all_files: list[File] — every file needed in the venv runfiles.
         dependency_files: list[File] — generated third-party overlays that
             packaging rules must keep out of first-party source layers.
+        wheel_aliases: list[File] — physical wheel-tree aliases that packaging
+            rules must exclude without archiving.
+        wheel_links: list[struct(link, install_tree, install_path)] — direct
+            site-packages links paired with their wheel install-tree targets.
         site_packages_pth_file: File — the main .pth (useful if the
             caller needs to know its runfiles path).
         pyvenv_cfg: File — declared pyvenv.cfg.
@@ -501,112 +520,101 @@ def assemble_venv(
         venv_name = ".{}.venv".format(safe_name)
     site_packages_rel = "{}/lib/{}/site-packages".format(venv_name, venv_py_ver)
 
-    # Two-hop indirection for each wheel that carries its install_tree File:
-    #
-    #   Hop 1: <venv>/_wheels/<key>/  →  <install_tree>   (resolved)
-    #   Hop 2: <venv>/lib/<py>/site-packages/<tl>
-    #            →  ../../../_wheels/<key>/lib/<py>/site-packages/<tl>
-    #          (intra-venv relative, declare_symlink)
-    #
-    # Hop 1 is a `ctx.actions.symlink(output=declare_directory, target_file=<tree>)`.
-    # In bazel-bin it's a single absolute symlink to the wheel's tree
-    # artifact; in runfiles Bazel materialises it as a real directory with
-    # per-file absolute symlinks inside — same shape the tree artifact
-    # already has in runfiles, so no new materialisation cost.
-    #
-    # Hop 2 is a `declare_symlink` with a relative `target_path`. Relative
-    # depth is identical in bazel-bin and runfiles because the target
-    # stays entirely within the venv's own output tree. This is what
-    # unblocks `py_image_layer` (which walks bazel-bin) and any other
-    # bazel-bin-walking tool.
     site_packages_to_venv_root = "/".join([".."] * 3)
     site_packages_to_wheels_root = site_packages_to_venv_root + "/_wheels"
 
-    # Map from site_packages_rfpath → wheel key for wheels that carry
-    # install_tree. The key is an 8-hex hash of the wheel's
-    # `install_tree.short_path` (globally unique among File objects), so:
-    #
-    #   * adding/removing a wheel doesn't shift the keys of other wheels
-    #     → unaffected Hop 1 actions and .pth lines stay byte-identical
-    #     → better remote-cache reuse for downstream consumers
-    #     (py_image_layer, py_venv_exec) that take the venv as input;
-    #   * paths are stable across builds for the same wheel, which makes
-    #     debugging (and key-aware tooling) deterministic.
-    #
-    # We fail loudly on the rare 32-bit hash collision; the caller can
-    # widen the key or rename a wheel rule.
     wheels_with_trees = [w for w in wheels if getattr(w, "install_tree", None) != None]
+    wheel_by_sp = {}
     wheel_key_by_sp = {}
     wheel_by_key = {}
     for w in wheels_with_trees:
-        key = _wheel_key(w)
-        prior = wheel_by_key.get(key)
+        prior = wheel_by_sp.get(w.site_packages_rfpath)
         if prior != None and prior.install_tree.short_path != w.install_tree.short_path:
-            fail("venv wheel key collision on '{}': {} vs {}".format(
-                key,
+            fail("venv site-packages path '{}' has multiple install trees: {} vs {}".format(
+                w.site_packages_rfpath,
                 prior.install_tree.short_path,
                 w.install_tree.short_path,
             ))
-        wheel_by_key[key] = w
-        wheel_key_by_sp[w.site_packages_rfpath] = key
+        wheel_by_sp[w.site_packages_rfpath] = w
+        if materialize_wheel_tree_aliases:
+            key = _wheel_key(w)
+            keyed_prior = wheel_by_key.get(key)
+            if keyed_prior != None and keyed_prior.install_tree.short_path != w.install_tree.short_path:
+                fail("venv wheel key collision on '{}': {} vs {}".format(
+                    key,
+                    keyed_prior.install_tree.short_path,
+                    w.install_tree.short_path,
+                ))
+            wheel_by_key[key] = w
+            wheel_key_by_sp[w.site_packages_rfpath] = key
 
     declared = []  # accumulator for venv outputs and launcher runfiles
-
-    # Hop 1: per-wheel directory under _wheels/<key>/. Bazel picks an
-    # absolute path under bazel-bin; the output is a tree artifact whose
-    # contents dereference the install_tree.
-    for w in wheels_with_trees:
-        key = wheel_key_by_sp[w.site_packages_rfpath]
-        wheel_dir = ctx.actions.declare_directory(
-            "{}/_wheels/{}".format(venv_name, key),
-        )
+    declared.extend([w.install_tree for w in wheels_with_trees])
+    wheel_aliases = []
+    wheel_links = []
+    for key in sorted(wheel_by_key.keys()):
+        alias = ctx.actions.declare_directory("{}/_wheels/{}".format(venv_name, key))
         ctx.actions.symlink(
-            output = wheel_dir,
-            target_file = w.install_tree,
+            output = alias,
+            target_file = wheel_by_key[key].install_tree,
         )
-        declared.append(wheel_dir)
+        declared.append(alias)
+        wheel_aliases.append(alias)
+        wheel = wheel_by_key[key]
+        if not wheel.top_levels:
+            wheel_links.append(struct(
+                install_path = "",
+                install_tree = wheel.install_tree,
+                link = alias,
+            ))
 
-    # Hop 2 (+ legacy one-hop fallback): per-top-level site-packages
-    # symlinks. If the owning wheel has a `_wheels/<key>/` entry, we
-    # route through it with an intra-venv relative path; otherwise fall
-    # back to the historical runfiles-root-escape unresolved symlink.
-    # Keys may be `/`-joined paths below the site-packages root (merged
-    # namespace packages, e.g. `jaraco/functools`); each extra path
-    # segment needs one more `..` to escape back up.
+    # Ordinary targets link through the runfiles root. Physical py_venv targets
+    # link through their wheel aliases so the bazel-bin tree remains usable by
+    # IDEs. Provider metadata keeps the original install-tree identity for
+    # image packagers in both cases.
     for tl, wheel_site_pkgs in top_level_to_site_pkgs.items():
+        if not materialize_wheel_tree_aliases and (tl.endswith(".dist-info") or tl.endswith(".egg-info")):
+            # Ordinary runtimes discover metadata from their declared wheel
+            # import roots. A runfiles-relative metadata link is dangling
+            # when only a manifest is available.
+            continue
         out = ctx.actions.declare_symlink("{}/{}".format(site_packages_rel, tl))
         extra_up = "../" * tl.count("/")
         key = wheel_key_by_sp.get(wheel_site_pkgs)
         if key != None:
-            ctx.actions.symlink(
-                output = out,
-                target_path = "{}{}/{}/lib/{}/site-packages/{}".format(
-                    extra_up,
-                    site_packages_to_wheels_root,
-                    key,
-                    wheel_py_ver,
-                    tl,
-                ),
+            target_path = "{}{}/{}/lib/{}/site-packages/{}".format(
+                extra_up,
+                site_packages_to_wheels_root,
+                key,
+                wheel_py_ver,
+                tl,
             )
         else:
-            ctx.actions.symlink(
-                output = out,
-                target_path = "{}{}/{}/{}".format(extra_up, escape, wheel_site_pkgs, tl),
-            )
+            target_path = "{}{}/{}/{}".format(extra_up, escape, wheel_site_pkgs, tl)
+        ctx.actions.symlink(
+            output = out,
+            target_path = target_path,
+        )
+        wheel = wheel_by_sp.get(wheel_site_pkgs)
+        if wheel != None:
+            wheel_links.append(struct(
+                install_path = "lib/{}/site-packages/{}".format(wheel_py_ver, tl),
+                install_tree = wheel.install_tree,
+                link = out,
+            ))
         declared.append(out)
 
-    # Physical merges for regular packages that span wheels (see
-    # _resolve_wheel_collisions). Each complete top-level namespace is one
-    # TreeArtifact under _merged, with a site-packages symlink for static
-    # tools. The explicit boundary lets packaging consumers classify the
-    # derived wheel content without guessing from ordinary venv paths.
+    # A regular package spanning namespace wheels makes its complete top-level
+    # package one TreeArtifact directly under site-packages. This gives Bazel
+    # one action owner for the namespace directory, while provider metadata
+    # classifies the generated content for packaging consumers.
     #
     # The merge runs as a build action under the exec-configuration
     # interpreter (same shape as WhlInstall's unpack action). A claimant
-    # without an install_tree can remain on the .pth fallback when
-    # it is unrelated to the regular-package conflict. A required claimant
-    # cannot: omitting it would silently produce an incomplete package.
-    merged_runfiles_roots = []
+    # involved in the conflict needs an install tree because omitting it would
+    # silently produce an incomplete directory; unrelated legacy claimants
+    # remain on the .pth fallback.
+    manifest_only_import_roots = []
     dependency_files = []
     for group in merge_groups:
         if group.missing_required_site_packages:
@@ -617,7 +625,7 @@ def assemble_venv(
                 group.root,
             ))
         if site_merge_script_py == None:
-            fail(("{}: wheels {} all contribute to the regular package `{}` — merging it " +
+            fail(("{}: wheels {} all contribute to the directory `{}` — merging it " +
                   "requires the venv rule to supply the site_merge tool.").format(
                 ctx.label,
                 group.site_packages_list,
@@ -626,7 +634,7 @@ def assemble_venv(
         exec_toolchain = ctx.toolchains[EXEC_TOOLS_TOOLCHAIN]
         exec_runtime = exec_toolchain.exec_tools.exec_runtime if exec_toolchain else None
         if exec_runtime == None:
-            fail(("{}: wheels {} all contribute to the regular package `{}` — merging it " +
+            fail(("{}: wheels {} all contribute to the directory `{}` — merging it " +
                   "requires an exec-configuration Python interpreter, but no `{}` toolchain " +
                   "was registered.").format(
                 ctx.label,
@@ -635,28 +643,25 @@ def assemble_venv(
                 EXEC_TOOLS_TOOLCHAIN,
             ))
 
-        merged_tree = ctx.actions.declare_directory(
-            "{}/_merged/{}".format(venv_name, group.root),
-        )
+        merged_tree = ctx.actions.declare_directory("{}/{}".format(site_packages_rel, group.root))
         arguments = ctx.actions.args()
         arguments.add(site_merge_script_py)
         arguments.add_all(
             [merged_tree],
             expand_directories = False,
             before_each = "--into",
-            format_each = "%s/" + group.root,
         )
         arguments.add("--collision-policy", package_collisions)
         trees = []
         for sp in group.site_packages_list:
-            key = wheel_key_by_sp.get(sp)
-            if key == None:
+            wheel = wheel_by_sp.get(sp)
+            if wheel == None:
                 fail("{}: wheel at {} contributes to merged package `{}` but has no install_tree.".format(
                     ctx.label,
                     sp,
                     group.root,
                 ))
-            tree = wheel_by_key[key].install_tree
+            tree = wheel.install_tree
             trees.append(tree)
             arguments.add_all(
                 [tree],
@@ -678,37 +683,32 @@ def assemble_venv(
                 "supports-path-mapping": "1",
             },
         )
-        merged_link = ctx.actions.declare_symlink("{}/{}".format(site_packages_rel, group.root))
-        ctx.actions.symlink(
-            output = merged_link,
-            target_path = "{}/_merged/{}/{}".format(
-                site_packages_to_venv_root,
-                group.root,
-                group.root,
-            ),
-        )
-        declared.extend([merged_tree, merged_link])
+        declared.append(merged_tree)
         dependency_files.append(merged_tree)
-        merged_runfiles_roots.append(to_rlocation_path(ctx, merged_tree))
 
-    # Keyed wheels (have `_wheels/<key>/`) emit a plain relative path:
-    # site.py joins it with the .pth's directory and appends to
-    # sys.path. Safe because root `*.pth` filenames are depth-1 RECORD
-    # entries that Hop 2 already symlinked at the venv root. Non-keyed
-    # wheels (`py_unpacked_wheel` without `top_levels`) emit
-    # `site.addsitedir` so wheel-root `.pth` shims still fire — a
-    # plain path entry would skip the .pth scan. First-party imports
-    # emit a plain path line.
+        # Directory runfiles expose the venv's site-packages normally.
+        # Manifest-only runfiles need one synthetic parent import root whose
+        # entries include every merged top-level TreeArtifact.
+        if not manifest_only_import_roots:
+            manifest_only_import_roots.append("/".join(
+                to_rlocation_path(ctx, merged_tree).split("/")[:-1],
+            ))
+
+    # Physical venvs use their alias-relative wheel roots. Ordinary targets use
+    # site.addsitedir so root-level .pth shims execute through runfiles. Direct
+    # links cover wheels with complete top-level metadata; these paths cover
+    # wheel roots that still need to participate in sys.path construction.
     def _format_imp(imp):
-        if imp in fully_covered_site_pkgs:
-            return None
         if imp.endswith("site-packages"):
+            if imp in fully_covered_site_pkgs:
+                return None
             key = wheel_key_by_sp.get(imp)
             if key != None:
-                return "{wheels_root}/{key}/lib/{py_ver}/site-packages".format(
-                    wheels_root = site_packages_to_wheels_root,
-                    key = key,
-                    py_ver = wheel_py_ver,
+                return ("import os, sys, site; " +
+                        "site.addsitedir(os.path.normpath(os.path.join(" +
+                        "sys.prefix, \"_wheels\", \"{}\", \"lib\", \"{}\", \"site-packages\")))").format(
+                    key,
+                    wheel_py_ver,
                 )
             return ("import os, sys, site; " +
                     "site.addsitedir(os.path.normpath(os.path.join(" +
@@ -717,9 +717,6 @@ def assemble_venv(
                 imp = imp,
             )
         return "{}/{}".format(escape, imp)
-
-    def _format_first_party_imp(imp):
-        return None if imp.endswith("site-packages") else imp
 
     venv_startup = ctx.actions.declare_file(
         "{}/_aspect_rules_py_startup.py".format(site_packages_rel),
@@ -749,10 +746,19 @@ def assemble_venv(
     runfiles_import_root_lines.use_param_file("%s", use_always = True)
     runfiles_import_root_lines.set_param_file_format("multiline")
     runfiles_import_root_lines.add(venv_to_runfiles_escape)
-    runfiles_import_root_lines.add_all(merged_runfiles_roots)
+    runfiles_import_root_lines.add_all([
+        "manifest-only:" + root
+        for root in manifest_only_import_roots
+    ])
+
+    def _format_runfiles_import(imp):
+        if imp in wheel_key_by_sp:
+            return None
+        return imp
+
     runfiles_import_root_lines.add_all(
         imports_depset,
-        map_each = _format_first_party_imp,
+        map_each = _format_runfiles_import,
         allow_closure = True,
     )
     ctx.actions.write(
@@ -779,8 +785,8 @@ def assemble_venv(
     pth_lines.set_param_file_format("multiline")
     pth_lines.add(escape)
 
-    # allow_closure lets _format_imp capture fully_covered_site_pkgs / wheel_key_by_sp
-    # so we don't have to materialise imports_depset via .to_list().
+    # allow_closure lets _format_imp capture known_site_packages so we
+    # don't have to materialise imports_depset via .to_list().
     pth_lines.add_all(imports_depset, map_each = _format_imp, allow_closure = True)
 
     site_packages_pth_file = ctx.actions.declare_file(
@@ -975,6 +981,8 @@ def assemble_venv(
         runtime_python = runtime_python,
         all_files = declared,
         dependency_files = dependency_files,
+        wheel_aliases = wheel_aliases,
+        wheel_links = wheel_links,
         site_packages_pth_file = site_packages_pth_file,
         pyvenv_cfg = pyvenv_cfg,
     )

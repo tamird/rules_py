@@ -107,6 +107,7 @@ py_test(
     ],
     imports = ["."],
     main = "runfiles_imports_test.py",
+    deps = ["@pypi//importlib_metadata"],
 )
 
 py_test(

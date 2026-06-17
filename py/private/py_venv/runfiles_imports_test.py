@@ -6,9 +6,17 @@ import pkgutil
 import sys
 import tempfile
 import unittest
+from importlib import metadata as stdlib_metadata
 from importlib import resources as importlib_resources
 from pathlib import Path, PurePath, PureWindowsPath
 from unittest import mock
+
+if sys.version_info < (3, 12):
+    import importlib_metadata
+
+    _METADATA_IMPLEMENTATIONS = (stdlib_metadata, importlib_metadata)
+else:
+    _METADATA_IMPLEMENTATIONS = (stdlib_metadata,)
 
 import runfiles_imports
 from runfiles_imports import (
@@ -306,6 +314,83 @@ class RunfilesImportsTest(unittest.TestCase):
                     ("discovery_manifest_package", True),
                     ("discovery_module", False),
                 },
+            )
+
+    def test_discovers_metadata_from_manifest_directory(self) -> None:
+        stale_site_packages = self.root / "stale-site-packages"
+        (stale_site_packages / "fixture_dist-1.0.dist-info").mkdir(parents=True)
+        site_packages = self.root / "site-packages"
+        dist_info = site_packages / "fixture_dist-1.0.dist-info"
+        dist_info.mkdir(parents=True)
+        (site_packages / "fixture.py").write_text(
+            "def value():\n"
+            "    return 7\n"
+        )
+        (dist_info / "METADATA").write_text(
+            "Metadata-Version: 2.1\n"
+            "Name: fixture-dist\n"
+            "Version: 1.0\n"
+        )
+        (dist_info / "entry_points.txt").write_text(
+            "[fixture.group]\n"
+            "fixture = fixture:value\n"
+        )
+        manifest = self.root / "MANIFEST"
+        manifest.write_text(f"wheel/site-packages {site_packages}\n")
+        self._cleanup_module("fixture")
+        old_path = list(sys.path)
+        self.addCleanup(sys.path.__setitem__, slice(None), old_path)
+        sys.path.insert(0, str(stale_site_packages))
+        self._install_manifest(manifest, ["wheel/site-packages"])
+        self._install_manifest(manifest, ["wheel/site-packages"])
+
+        loaded = importlib.import_module("fixture")
+
+        self.assertEqual(loaded.value(), 7)
+        for metadata in _METADATA_IMPLEMENTATIONS:
+            available_entry_points = metadata.entry_points()
+            group = (
+                available_entry_points.select(group="fixture.group")
+                if hasattr(available_entry_points, "select")
+                else available_entry_points.get("fixture.group", ())
+            )
+            matching = [
+                entry_point
+                for entry_point in group
+                if entry_point.name == "fixture"
+            ]
+            self.assertEqual(metadata.version("fixture-dist"), "1.0")
+            self.assertEqual(len(matching), 1)
+            self.assertEqual(matching[0].load()(), 7)
+
+        overlay_manifest = self.root / "OVERLAY_MANIFEST"
+        overlay_manifest.write_text(
+            f"wheel/site-packages/fixture.py {site_packages / 'fixture.py'}\n"
+        )
+        self._install_manifest(overlay_manifest, ["wheel/site-packages"])
+        for metadata in _METADATA_IMPLEMENTATIONS:
+            self.assertFalse(
+                any(
+                    distribution.metadata is not None
+                    and distribution.metadata.get("Name") == "fixture-dist"
+                    for distribution in metadata.distributions()
+                )
+            )
+
+        self._install_manifest(manifest, ["wheel/site-packages"])
+        empty_manifest = self.root / "EMPTY_MANIFEST"
+        empty_manifest.write_text("")
+        self._install_manifest(empty_manifest, ["wheel/site-packages"])
+        sys.modules.pop("fixture", None)
+        with self.assertRaises(ModuleNotFoundError):
+            importlib.import_module("fixture")
+        for metadata in _METADATA_IMPLEMENTATIONS:
+            self.assertFalse(
+                any(
+                    distribution.metadata is not None
+                    and distribution.metadata.get("Name") == "fixture-dist"
+                    for distribution in metadata.distributions()
+                )
             )
 
     def test_does_not_extend_third_party_regular_package(self) -> None:

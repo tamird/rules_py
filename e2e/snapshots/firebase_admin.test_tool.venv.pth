@@ -1,3 +1,5 @@
 ../../../../../../..
 ../../../../../../../_main
 ../../../../../../../aspect_rules_py++uv+project__firebase_admin_import
+import os, sys, site; site.addsitedir(os.path.normpath(os.path.join(sys.prefix, "_wheels", "1f7c2601", "lib", "python3.11", "site-packages")))
+import os, sys, site; site.addsitedir(os.path.normpath(os.path.join(sys.prefix, "_wheels", "c8bf1b8d", "lib", "python3.11", "site-packages")))

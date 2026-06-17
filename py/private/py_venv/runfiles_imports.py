@@ -1,10 +1,10 @@
 """Resolve modules under configured Bazel runfiles-manifest import roots.
 
 This import hook is not a general virtual runfiles filesystem. It supports
-module imports and discovery plus regular-package resources. Manifest-only
-namespace packages remain loaderless so Python can combine their portions;
-they cannot expose package resources. Unrelated runtime data should be located
-through Bazel's runfiles API.
+module imports and discovery, regular-package resources, and directory-backed
+distribution metadata. Manifest-only namespace packages remain loaderless so
+Python can combine their portions; they cannot expose package resources.
+Unrelated runtime data should be located through Bazel's runfiles API.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import inspect
 import ntpath
 import os
 import posixpath
+import re
 import sys
 from collections.abc import Iterable, Mapping, Sequence
 
@@ -451,18 +452,78 @@ def _register_finder(finder: _ManifestPathFinder) -> str:
     return path
 
 
+def _normalize_distribution_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+class _ManifestDistributionFinder(importlib.abc.MetaPathFinder):
+    def __init__(self, roots: Mapping[str, str]) -> None:
+        self._roots = dict(roots)
+
+    def replace(self, paths: Iterable[str], roots: Mapping[str, str]) -> None:
+        for path in paths:
+            self._roots.pop(path, None)
+        self._roots.update(roots)
+
+    def find_spec(
+        self,
+        fullname: str,
+        path: Sequence[str] | None = None,
+        target: object | None = None,
+    ) -> None:
+        del fullname, path, target
+        return None
+
+    def find_distributions(self, context: object | None = None):
+        # Both importlib.metadata and its backport use this sys.meta_path
+        # protocol for custom distribution discovery:
+        # https://docs.python.org/3/library/importlib.metadata.html#extending-the-search-algorithm
+        from importlib.metadata import Distribution
+        from pathlib import Path
+
+        paths = sys.path if context is None else getattr(context, "path", sys.path)
+        requested_name = getattr(context, "name", None)
+        if requested_name is not None:
+            requested_name = _normalize_distribution_name(requested_name)
+        for path in paths:
+            root = self._roots.get(path)
+            if root is None:
+                continue
+            try:
+                metadata_paths = sorted(
+                    child
+                    for child in Path(root).iterdir()
+                    if child.name.endswith((".dist-info", ".egg-info"))
+                )
+            except OSError:
+                continue
+            for metadata in metadata_paths:
+                distribution = Distribution.at(metadata)
+                name = distribution.metadata.get("Name")
+                if requested_name is None or (
+                    name and _normalize_distribution_name(name) == requested_name
+                ):
+                    yield distribution
+
+
+_DISTRIBUTION_FINDER = _ManifestDistributionFinder({})
+
+
 def _install_manifest_groups(groups: Mapping[str, _ManifestGroup]) -> dict[str, str]:
     # Path hooks are Python's supported interface for non-filesystem sys.path
     # entries: https://docs.python.org/3/library/sys.html#sys.path_hooks
     if _manifest_path_hook not in sys.path_hooks:
         sys.path_hooks.insert(0, _manifest_path_hook)
     paths: dict[str, str] = {}
+    distribution_roots: dict[str, str] = {}
+    updated_paths = []
     for logical, group in groups.items():
         path = _ROOT_PATHS.get(logical)
         if not group.entries:
             if path is not None:
                 _PATH_FINDERS[path] = _ManifestPathFinder(group)
                 sys.path_importer_cache.pop(path, None)
+                updated_paths.append(path)
             continue
         if path is None:
             path = _register_finder(_ManifestPathFinder(group))
@@ -471,7 +532,27 @@ def _install_manifest_groups(groups: Mapping[str, _ManifestGroup]) -> dict[str, 
             _PATH_FINDERS[path] = _ManifestPathFinder(group)
             group.path_entries[""] = path
             sys.path_importer_cache.pop(path, None)
+        updated_paths.append(path)
         paths[logical] = path
+        root = group.entries.get("")
+        # A wheel install is one TreeArtifact, which Bazel emits as one
+        # directory mapping rather than one manifest entry per child:
+        # https://github.com/bazelbuild/bazel/blob/7ac4b81ec29db18d39043a4f8c76410bafae5bb5/src/main/java/com/google/devtools/build/lib/analysis/Runfiles.java#L343-L350
+        # https://github.com/bazelbuild/bazel/blob/7ac4b81ec29db18d39043a4f8c76410bafae5bb5/src/main/java/com/google/devtools/build/lib/analysis/SourceManifestAction.java#L288-L316
+        # Per-file overlays intentionally do not synthesize distribution
+        # objects; directory mappings can use importlib.metadata directly.
+        if len(group.entries) == 1 and root is not None and os.path.isdir(root):
+            distribution_roots[path] = root
+    _DISTRIBUTION_FINDER.replace(updated_paths, distribution_roots)
+    if distribution_roots:
+        # Prefer valid manifest roots to stale metadata symlinks left in an
+        # incrementally rebuilt physical venv.
+        if _DISTRIBUTION_FINDER not in sys.meta_path:
+            try:
+                index = sys.meta_path.index(importlib.machinery.PathFinder)
+            except ValueError:
+                index = len(sys.meta_path)
+            sys.meta_path.insert(index, _DISTRIBUTION_FINDER)
     return paths
 
 
