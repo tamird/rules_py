@@ -1,0 +1,27 @@
+
+load("@aspect_rules_py//uv/private/pep517_whl:rule.bzl", "pep517_whl")
+load("@aspect_rules_py//py:defs.bzl", "py_binary")
+
+py_binary(
+    name = "build_tool",
+    main = "@aspect_rules_py//uv/private/pep517_whl:build_helper.py",
+    srcs = ["@aspect_rules_py//uv/private/pep517_whl:build_helper.py"],
+    deps = ["@aspect_rules_py//uv/private/pep517_whl:memory_monitor"],
+)
+
+pep517_whl(
+    name = "whl",
+    src = "@@//:MODULE.bazel",
+    tool = ":build_tool",
+    version = "1.0",
+    args = [],
+    built_wheel_console_scripts = ["demo=demo:main"],
+    built_wheel_directory_top_levels = [],
+    built_wheel_top_levels = [],
+    visibility = ["//visibility:public"],
+)
+
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)

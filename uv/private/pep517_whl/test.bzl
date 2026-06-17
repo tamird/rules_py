@@ -24,6 +24,7 @@ load(
     "tool",
 )
 load("@rules_cc//cc:defs.bzl", "cc_toolchain")
+load(":providers.bzl", "BuiltWheelMetadataInfo")
 
 _ACTION_ENV = "//command_line_option:action_env"
 _HOST_PYTHON_ENV = [
@@ -95,6 +96,42 @@ def _build_memory_test_impl(ctx):
     return analysistest.end(env)
 
 build_memory_test = analysistest.make(_build_memory_test_impl)
+
+def _built_wheel_metadata_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    asserts.true(env, BuiltWheelMetadataInfo in target)
+    if BuiltWheelMetadataInfo in target:
+        metadata = target[BuiltWheelMetadataInfo]
+        asserts.equals(env, tuple(ctx.attr.expected_top_levels), metadata.top_levels)
+        asserts.equals(env, tuple(ctx.attr.expected_directory_top_levels), metadata.directory_top_levels)
+        asserts.equals(env, tuple(ctx.attr.expected_console_scripts), metadata.console_scripts)
+    return analysistest.end(env)
+
+built_wheel_metadata_test = analysistest.make(
+    _built_wheel_metadata_test_impl,
+    attrs = {
+        "expected_console_scripts": attr.string_list(),
+        "expected_directory_top_levels": attr.string_list(),
+        "expected_top_levels": attr.string_list(),
+    },
+)
+
+def _built_wheel_metadata_absent_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    asserts.false(env, BuiltWheelMetadataInfo in target)
+    return analysistest.end(env)
+
+built_wheel_metadata_absent_test = analysistest.make(
+    _built_wheel_metadata_absent_test_impl,
+)
+
+built_wheel_metadata_failure_test = analysistest.make(
+    _analysis_failure_test_impl,
+    attrs = {"expected_error": attr.string()},
+    expect_failure = True,
+)
 
 def _compiler_selection_toolchain_config_impl(ctx):
     action_tools = {

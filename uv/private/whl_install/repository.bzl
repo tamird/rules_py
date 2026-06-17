@@ -637,8 +637,9 @@ filegroup(
     # wheel, and peeking at them would force a useless download.
     #
     # The sbuild fallback, whose contents are unknowable until build time,
-    # is never peeked at here: it emits no PyWheelsInfo and consumers use
-    # .pth-based resolution.
+    # is never peeked at here. Its build target carries declared metadata
+    # into whl_install; without declared top-levels, consumers preserve the
+    # complete wheel through .pth-based resolution.
     #
     # We read from `whl_files` (a real label_list) rather than `whls` (a
     # JSON-encoded string of labels) because only the former adds the

@@ -298,6 +298,52 @@ An sdist (if available) will be built into a wheel for installation if no wheels
 are available, or no wheels matching the target configuration are found. Sdist
 builds occur using the configured Python and Cc toolchains.
 
+A wheel built from an sdist does not exist until execution, after Bazel has
+finished analysis. Declare configuration-invariant package-version metadata so
+one lock can expose the known parts during analysis:
+
+```starlark
+uv.built_wheel_metadata(
+    lock = "//:uv.lock",
+    name = "cowsay",
+    version = "6.0",
+    top_levels = [
+        "cowsay",
+        "cowsay-6.0.dist-info",
+    ],
+    directory_top_levels = [
+        "cowsay",
+        "cowsay-6.0.dist-info",
+    ],
+    console_scripts = [
+        "cowsay=cowsay.__main__:cli",
+    ],
+)
+```
+
+When supplied, `top_levels` must list every immediate entry that the wheel
+installs into `site-packages`; `directory_top_levels` is the complete directory
+subset. This layout lets Bazel project non-conflicting package roots. A source
+build declaration does not describe nested PEP 420 and regular-package
+boundaries, so a directory collision follows `package_collisions` and then uses
+the complete-wheel fallback under `warning` or `ignore`. Without `top_levels`,
+Bazel does not project individual top-level entries.
+
+`console_scripts` may be declared without `top_levels`. Declared scripts are
+projected as wrappers under the generated environment's `bin` directory. Within
+a metadata declaration, the list is complete: omitting it declares that the
+wheel has no scripts. A source build without a metadata declaration retains
+unknown analysis-time metadata. The unpack action validates each complete part
+of a declaration and fails when it is stale. Repeat the declaration for another
+lock even when it resolves the same source. Separate locks may build
+same-version forks or apply different patches, so their metadata is independent.
+
+Do not declare metadata when top-level layout can vary by target configuration,
+such as a native extension whose filename contains an ABI-specific suffix. The
+package then uses the complete-wheel fallback instead of exposing incomplete
+analysis-time layout. Console scripts may still be declared independently when
+their names and entry points are configuration-invariant.
+
 ## Best practices
 
 **Consolidate your hubs**. In `rules_python`, environments with multiple depsets

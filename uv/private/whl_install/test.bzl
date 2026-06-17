@@ -161,9 +161,9 @@ site_packages_segments_test = unittest.make(_site_packages_segments_test_impl)
 _LINUX_WHL = "demo-1.0.0-cp311-cp311-manylinux_2_17_x86_64.whl"
 _MACOS_WHL = "demo-1.0.0-cp311-cp311-macosx_11_0_arm64.whl"
 
-# Built-from-source fallback: contents are unknowable at repo-fetch time, so
-# no metadata entry exists for it.
-_SBUILD_WHL = "demo-1.0.0-py3-none-any.whl"
+# A selected wheel basename absent from every metadata map exercises the
+# complete-wheel fallback.
+_METADATA_MISS_WHL = "demo-1.0.0-py3-none-any.whl"
 
 _TOP_LEVELS = {
     _LINUX_WHL: [
@@ -185,12 +185,19 @@ _DIRECTORY_TOP_LEVELS = {
 }
 
 _CONSOLE_SCRIPTS = {
-    _LINUX_WHL: ["demo=demo.cli:main"],
+    _LINUX_WHL: [],
     _MACOS_WHL: [
         "demo-mac=demo.cli:mac_main",
         "demo=demo.cli:main",
     ],
 }
+
+_BUILT_WHEEL_TOP_LEVELS = [
+    "demo",
+    "demo-1.0.0.dist-info",
+]
+
+_BUILT_WHEEL_CONSOLE_SCRIPTS = ["demo=demo.cli:main"]
 
 def _metadata_selection_test_impl(ctx):
     env = analysistest.begin(ctx)
@@ -202,7 +209,9 @@ def _metadata_selection_test_impl(ctx):
     wheel = wheels[0]
     asserts.equals(env, tuple(ctx.attr.expected_top_levels), wheel.top_levels)
     asserts.equals(env, tuple(ctx.attr.expected_directory_top_levels), wheel.directory_top_levels)
+    asserts.equals(env, tuple(ctx.attr.expected_namespace_top_levels), wheel.namespace_top_levels)
     asserts.equals(env, tuple(ctx.attr.expected_console_scripts), wheel.console_scripts)
+    asserts.equals(env, ctx.attr.expected_topology_known, wheel.topology_known)
 
     # Explicit leak checks: surface belonging to the OTHER (inactive)
     # platform wheel must not appear for this configuration's wheel.
@@ -219,6 +228,26 @@ def _metadata_selection_test_impl(ctx):
             "console script '{}' from an inactive platform wheel leaked into the selected wheel's surface".format(leaked),
         )
 
+    if ctx.attr.expect_empty_scripts_validation:
+        actions = [
+            action
+            for action in analysistest.target_actions(env)
+            if action.mnemonic == "WhlInstall"
+        ]
+        asserts.equals(env, 1, len(actions))
+        metadata_args = []
+        if len(actions) == 1:
+            metadata_args = [
+                actions[0].argv[index + 1]
+                for index in range(len(actions[0].argv) - 1)
+                if actions[0].argv[index] == "--expected-metadata"
+            ]
+        asserts.equals(env, 1, len(metadata_args))
+        if len(metadata_args) == 1:
+            expected_metadata = json.decode(metadata_args[0])
+            asserts.true(env, "console_scripts" in expected_metadata)
+            asserts.equals(env, [], expected_metadata.get("console_scripts"))
+
     return analysistest.end(env)
 
 _metadata_selection_test = analysistest.make(
@@ -226,7 +255,10 @@ _metadata_selection_test = analysistest.make(
     attrs = {
         "expected_top_levels": attr.string_list(),
         "expected_directory_top_levels": attr.string_list(),
+        "expected_namespace_top_levels": attr.string_list(),
         "expected_console_scripts": attr.string_list(),
+        "expected_topology_known": attr.bool(default = True),
+        "expect_empty_scripts_validation": attr.bool(),
         "leaked_top_levels": attr.string_list(),
         "leaked_console_scripts": attr.string_list(),
     },
@@ -245,7 +277,16 @@ def _metadata_miss_test_impl(ctx):
     asserts.equals(env, 1, len(wheels))
     asserts.equals(env, (), wheels[0].top_levels)
     asserts.equals(env, (), wheels[0].console_scripts)
+    asserts.false(env, wheels[0].topology_known)
     asserts.true(env, wheels[0].install_tree != None)
+    actions = [
+        action
+        for action in analysistest.target_actions(env)
+        if action.mnemonic == "WhlInstall"
+    ]
+    asserts.equals(env, 1, len(actions))
+    if len(actions) == 1:
+        asserts.false(env, "--expected-metadata" in actions[0].argv)
     return analysistest.end(env)
 
 _metadata_miss_test = analysistest.make(_metadata_miss_test_impl)
@@ -257,7 +298,7 @@ def metadata_selection_test_suite(name):
         name: prefix for the generated test targets.
     """
 
-    for basename in [_LINUX_WHL, _MACOS_WHL, _SBUILD_WHL]:
+    for basename in [_LINUX_WHL, _MACOS_WHL, _METADATA_MISS_WHL]:
         # The wheel is never unpacked at analysis time; an empty stub file
         # with the right basename is enough to drive the metadata lookup.
         write_file(
@@ -270,7 +311,7 @@ def metadata_selection_test_suite(name):
     for fixture_name, src in [
         ("__metadata_linux_fixture", _LINUX_WHL),
         ("__metadata_macos_fixture", _MACOS_WHL),
-        ("__metadata_sbuild_fixture", _SBUILD_WHL),
+        ("__metadata_miss_fixture", _METADATA_MISS_WHL),
     ]:
         whl_install(
             name = fixture_name,
@@ -280,6 +321,79 @@ def metadata_selection_test_suite(name):
             console_scripts = _CONSOLE_SCRIPTS,
             tags = ["manual"],
         )
+
+    native.alias(
+        name = "__metadata_declared_sbuild_selected",
+        actual = "//uv/private/pep517_whl:__built_wheel_metadata_fixture",
+        tags = ["manual"],
+    )
+
+    whl_install(
+        name = "__metadata_declared_sbuild_fixture",
+        src = ":__metadata_declared_sbuild_selected",
+        tags = ["manual"],
+    )
+
+    native.alias(
+        name = "__metadata_declared_sbuild_no_scripts_selected",
+        actual = "//uv/private/pep517_whl:__top_level_only_metadata_fixture",
+        tags = ["manual"],
+    )
+
+    whl_install(
+        name = "__metadata_declared_sbuild_no_scripts_fixture",
+        src = ":__metadata_declared_sbuild_no_scripts_selected",
+        tags = ["manual"],
+    )
+
+    native.alias(
+        name = "__metadata_empty_sbuild_selected",
+        actual = "//uv/private/pep517_whl:__empty_built_wheel_metadata_fixture",
+        tags = ["manual"],
+    )
+
+    whl_install(
+        name = "__metadata_empty_sbuild_fixture",
+        src = ":__metadata_empty_sbuild_selected",
+        tags = ["manual"],
+    )
+
+    native.alias(
+        name = "__metadata_unknown_sbuild_selected",
+        actual = "//uv/private/pep517_whl:__unknown_built_wheel_metadata_fixture",
+        tags = ["manual"],
+    )
+
+    whl_install(
+        name = "__metadata_unknown_sbuild_fixture",
+        src = ":__metadata_unknown_sbuild_selected",
+        tags = ["manual"],
+    )
+
+    whl_install(
+        name = "__metadata_compile_pyc_fixture",
+        src = _LINUX_WHL,
+        compile_pyc = True,
+        top_levels = {_LINUX_WHL: ["demo.py"]},
+        tags = ["manual"],
+    )
+
+    write_file(
+        name = "__metadata_empty_scripts_patch",
+        out = "metadata-empty-scripts.patch",
+        content = [""],
+        tags = ["manual"],
+    )
+
+    whl_install(
+        name = "__metadata_empty_scripts_patched_fixture",
+        src = _LINUX_WHL,
+        console_scripts = _CONSOLE_SCRIPTS,
+        directory_top_levels = _DIRECTORY_TOP_LEVELS,
+        patches = [":__metadata_empty_scripts_patch"],
+        tags = ["manual"],
+        top_levels = _TOP_LEVELS,
+    )
 
     _metadata_selection_test(
         name = name + "_linux_test",
@@ -304,9 +418,72 @@ def metadata_selection_test_suite(name):
         leaked_console_scripts = [],
     )
 
+    _metadata_selection_test(
+        name = name + "_known_empty_scripts_patched_test",
+        expect_empty_scripts_validation = True,
+        expected_console_scripts = [],
+        expected_directory_top_levels = _DIRECTORY_TOP_LEVELS[_LINUX_WHL],
+        expected_topology_known = False,
+        expected_top_levels = _TOP_LEVELS[_LINUX_WHL],
+        leaked_console_scripts = _CONSOLE_SCRIPTS[_MACOS_WHL],
+        leaked_top_levels = [],
+        target_under_test = ":__metadata_empty_scripts_patched_fixture",
+    )
+
+    _metadata_selection_test(
+        name = name + "_known_empty_built_scripts_test",
+        expect_empty_scripts_validation = True,
+        expected_console_scripts = [],
+        expected_directory_top_levels = ["demo"],
+        expected_topology_known = False,
+        expected_top_levels = ["demo"],
+        leaked_console_scripts = [],
+        leaked_top_levels = [],
+        target_under_test = ":__metadata_declared_sbuild_no_scripts_fixture",
+    )
+
     _metadata_miss_test(
-        name = name + "_sbuild_fallback_test",
-        target_under_test = ":__metadata_sbuild_fixture",
+        name = name + "_metadata_miss_test",
+        target_under_test = ":__metadata_miss_fixture",
+    )
+
+    _metadata_miss_test(
+        name = name + "_unknown_sbuild_metadata_test",
+        target_under_test = ":__metadata_unknown_sbuild_fixture",
+    )
+
+    _metadata_selection_test(
+        name = name + "_empty_sbuild_scripts_test",
+        expect_empty_scripts_validation = True,
+        expected_console_scripts = [],
+        expected_directory_top_levels = [],
+        expected_topology_known = False,
+        expected_top_levels = [],
+        leaked_console_scripts = [],
+        leaked_top_levels = [],
+        target_under_test = ":__metadata_empty_sbuild_fixture",
+    )
+
+    _metadata_selection_test(
+        name = name + "_compile_pyc_test",
+        target_under_test = ":__metadata_compile_pyc_fixture",
+        expected_console_scripts = [],
+        expected_directory_top_levels = ["__pycache__"],
+        expected_namespace_top_levels = ["__pycache__"],
+        expected_top_levels = ["demo.py", "__pycache__"],
+        leaked_console_scripts = [],
+        leaked_top_levels = [],
+    )
+
+    _metadata_selection_test(
+        name = name + "_declared_sbuild_test",
+        expected_console_scripts = _BUILT_WHEEL_CONSOLE_SCRIPTS,
+        expected_directory_top_levels = _BUILT_WHEEL_TOP_LEVELS,
+        expected_topology_known = False,
+        expected_top_levels = _BUILT_WHEEL_TOP_LEVELS,
+        leaked_console_scripts = [],
+        leaked_top_levels = [],
+        target_under_test = ":__metadata_declared_sbuild_fixture",
     )
 
 def whl_install_suite():

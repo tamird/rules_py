@@ -6,3 +6,7 @@
  from .main import (
 
      __version__,
+--- /dev/null
++++ b/lib/python3.11/site-packages/cowsay_lock_scoped.py
+@@ -0,0 +1 @@
++LOCK_SCOPED = True

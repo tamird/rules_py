@@ -89,6 +89,21 @@ use_repo(uv_bin, "uv")
 
 uv = use_extension("@aspect_rules_py//uv:extensions.bzl", "uv")
 
+# A focused repository-generation fixture: script metadata must not require
+# topology metadata to reach the generated wheel rule.
+sdist_build = use_repo_rule(
+    "@aspect_rules_py//uv/private/sdist_build:repository.bzl",
+    "sdist_build",
+)
+
+sdist_build(
+    name = "sdist_build_console_script_only",
+    src = "//:MODULE.bazel",
+    built_wheel_console_scripts = ["demo=demo:main"],
+    is_native = "false",
+    version = "1.0",
+)
+
 # Per-case MODULE fragments. Each redeclares its own use_extension(...) proxies.
 include("//cases/arch-alias-marker:setup.MODULE.bazel")
 include("//cases/azure-core-tracing-overlap:setup.MODULE.bazel")

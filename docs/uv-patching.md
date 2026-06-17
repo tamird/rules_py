@@ -45,6 +45,13 @@ Where `patches/nvidia-strip-init.patch` might look like:
 +# Stripped by aspect_rules_py override
 ```
 
+Post-install patches may change files below existing top-level packages, but
+must preserve the immediate `site-packages` entries and console scripts that
+rules_py discovered during repository setup. The install action validates both
+after patching. Nested package topology becomes unknown to analysis, so a
+directory collision follows `package_collisions` and then uses the `.pth`
+fallback under `warning` or `ignore`.
+
 ### Applying the same patch to multiple packages
 
 Use a Starlark list comprehension:
