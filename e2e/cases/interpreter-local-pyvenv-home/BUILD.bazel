@@ -52,8 +52,55 @@ py_venv(
     python_version = "3.94",
 )
 
+# Model the root-level interpreter and Lib directory used by Windows PBS
+# archives. This venv is inspected but never executed.
+filegroup(
+    name = "windows_layout_files",
+    srcs = ["python.exe"],
+)
+
+py_runtime(
+    name = "windows_layout_py3_runtime",
+    files = [":windows_layout_files"],
+    interpreter = "python.exe",
+    interpreter_version_info = {
+        "major": "3",
+        "minor": "95",
+        "micro": "0",
+    },
+    python_version = "PY3",
+)
+
+py_runtime_pair(
+    name = "windows_layout_runtime_pair",
+    py2_runtime = None,
+    py3_runtime = ":windows_layout_py3_runtime",
+)
+
+config_setting(
+    name = "is_windows_layout_python_version",
+    flag_values = {
+        "@aspect_rules_py//py/private/interpreter:python_version": "3.95",
+    },
+)
+
+toolchain(
+    name = "windows_layout_python_toolchain",
+    target_settings = [":is_windows_layout_python_version"],
+    toolchain = ":windows_layout_runtime_pair",
+    toolchain_type = "@bazel_tools//tools/python:toolchain_type",
+)
+
+py_venv(
+    name = "venv_windows_layout",
+    python_version = "3.95",
+)
+
 py_test(
     name = "test_pyvenv_home",
     srcs = ["test_pyvenv_home.py"],
-    data = [":venv_sys"],
+    data = [
+        ":venv_sys",
+        ":venv_windows_layout",
+    ],
 )
