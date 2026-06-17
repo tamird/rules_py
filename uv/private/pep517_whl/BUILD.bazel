@@ -7,6 +7,12 @@ load(
     ":test.bzl",
     "build_memory_failure_test",
     "build_memory_test",
+    "compiler_selection_toolchain",
+    "pep517_native_whl_compiler_selection_test",
+    "pep517_native_whl_disabled_cxx_test",
+    "pep517_native_whl_missing_cxx_test",
+    "pep517_native_whl_same_driver_clang_test",
+    "pep517_native_whl_same_driver_gcc_test",
     "pep517_native_whl_toolchain_env_test",
 )
 
@@ -26,6 +32,7 @@ bzl_library(
         ":build_memory",
         "//py/private/toolchain:types",
         "@bazel_lib//lib:resource_sets",
+        "@rules_cc//cc:action_names_bzl",
     ],
 )
 
@@ -42,6 +49,19 @@ py_test(
     deps = [":memory_monitor"],
 )
 
+py_test(
+    name = "build_helper_native_tools_test",
+    srcs = ["build_helper_native_tools_test.py"],
+    data = [
+        ":build_helper.py",
+        ":memory_monitor",
+    ],
+    deps = [
+        "@pypi//build",
+        "@pypi//setuptools",
+    ],
+)
+
 bzl_library(
     name = "test",
     srcs = ["test.bzl"],
@@ -49,6 +69,7 @@ bzl_library(
     deps = [
         ":rule",
         "@bazel_skylib//lib:unittest",
+        "@rules_cc//cc:bzl_srcs",
     ],
 )
 
@@ -111,18 +132,13 @@ build_memory_test(
     target_under_test = ":__maximum_memory_fixture",
 )
 
-# Fixture replicates the toolchains + env defaults emitted by sdist_build's
-# BUILD template (see uv/private/sdist_build/repository.bzl). The analysis
-# test below asserts these expand to non-empty toolchain paths.
+# Replicate the extra toolchain and package env emitted by sdist_build's BUILD
+# template (see uv/private/sdist_build/repository.bzl). Compiler, archiver,
+# and strip defaults come from the selected CcToolchainInfo.
 pep517_native_whl(
     name = "__toolchain_env_fixture",
     src = ":__stub_sdist",
     env = {
-        "CC": "$(CC)",
-        "CXX": "$(CC)",
-        "AR": "$(AR)",
-        "LD": "$(LD)",
-        "STRIP": "$(STRIP)",
         "JAVA_HOME": "$(JAVABASE)",
         "JAVA": "$(JAVA)",
         "JAR": "$(JAVABASE)/bin/jar",
@@ -138,7 +154,188 @@ pep517_native_whl(
 
 pep517_native_whl_toolchain_env_test(
     name = "toolchain_env_test",
+    check_toolchain_env = True,
     target_under_test = ":__toolchain_env_fixture",
+)
+
+compiler_selection_toolchain(
+    name = "__compiler_selection",
+    ar_driver = "ar_driver_test.sh",
+    c_driver = "c_driver_test.sh",
+    compiler = "gcc",
+    compiler_actions = [
+        "CC",
+        "CXX",
+    ],
+    cxx_driver = "cxx_driver_test.sh",
+    ld_driver = "ld_driver_test.sh",
+    no_legacy_features = False,
+    optional_tools = [
+        "AR",
+        "STRIP",
+    ],
+    strip_driver = "strip_driver_test.sh",
+)
+
+compiler_selection_toolchain(
+    name = "__same_driver_clang",
+    ar_driver = "ar_driver_test.sh",
+    c_driver = "c_driver_test.sh",
+    compiler = "clang",
+    compiler_actions = [
+        "CC",
+        "CXX",
+    ],
+    cxx_driver = "c_driver_test.sh",
+    ld_driver = "ld_driver_test.sh",
+    no_legacy_features = False,
+    optional_tools = [
+        "AR",
+        "STRIP",
+    ],
+    strip_driver = "strip_driver_test.sh",
+)
+
+compiler_selection_toolchain(
+    name = "__same_driver_gcc",
+    ar_driver = "ar_driver_test.sh",
+    c_driver = "c_driver_test.sh",
+    compiler = "gcc-12",
+    compiler_actions = [
+        "CC",
+        "CXX",
+    ],
+    cxx_driver = "c_driver_test.sh",
+    ld_driver = "ld_driver_test.sh",
+    no_legacy_features = False,
+    optional_tools = [],
+    strip_driver = "strip_driver_test.sh",
+)
+
+compiler_selection_toolchain(
+    name = "__missing_cxx",
+    ar_driver = "ar_driver_test.sh",
+    c_driver = "c_driver_test.sh",
+    compiler = "gcc",
+    compiler_actions = ["CC"],
+    cxx_driver = "cxx_driver_test.sh",
+    ld_driver = "ld_driver_test.sh",
+    no_legacy_features = False,
+    optional_tools = [],
+    strip_driver = "strip_driver_test.sh",
+)
+
+compiler_selection_toolchain(
+    name = "__disabled_cxx",
+    ar_driver = "ar_driver_test.sh",
+    c_driver = "c_driver_test.sh",
+    compiler = "gcc",
+    compiler_actions = ["CC"],
+    cxx_driver = "cxx_driver_test.sh",
+    ld_driver = "ld_driver_test.sh",
+    no_legacy_features = True,
+    optional_tools = [],
+    strip_driver = "strip_driver_test.sh",
+)
+
+pep517_native_whl_compiler_selection_test(
+    name = "compiler_selection_test",
+    expected_tools = {
+        "AR": "uv/private/pep517_whl/ar_driver_test.sh",
+        "CC": "uv/private/pep517_whl/c_driver_test.sh",
+        "CXX": "uv/private/pep517_whl/cxx_driver_test.sh",
+        "STRIP": "uv/private/pep517_whl/strip_driver_test.sh",
+    },
+    target_under_test = ":__toolchain_env_fixture",
+)
+
+pep517_native_whl_same_driver_clang_test(
+    name = "same_driver_clang_test",
+    expected_cxx_args = ["--driver-mode=g++"],
+    expected_tools = {
+        "AR": "uv/private/pep517_whl/ar_driver_test.sh",
+        "CC": "uv/private/pep517_whl/c_driver_test.sh",
+        "CXX": "uv/private/pep517_whl/c_driver_test.sh",
+        "STRIP": "uv/private/pep517_whl/strip_driver_test.sh",
+    },
+    target_under_test = ":__toolchain_env_fixture",
+)
+
+pep517_native_whl_same_driver_gcc_test(
+    name = "same_driver_gcc_test",
+    expected_tool_errors = {
+        "CXX": "C++ toolchain 'gcc-12' uses 'uv/private/pep517_whl/c_driver_test.sh' for both CC and CXX; set an explicit CXX override",
+    },
+    expected_tools = {
+        "CC": "uv/private/pep517_whl/c_driver_test.sh",
+    },
+    target_under_test = ":__toolchain_env_fixture",
+)
+
+pep517_native_whl_missing_cxx_test(
+    name = "missing_cxx_test",
+    expected_tool_errors = {
+        "CXX": "C++ toolchain CXX tool is absent from all_files: uv/private/pep517_whl/DUMMY_GCC_TOOL",
+    },
+    expected_tools = {
+        "CC": "uv/private/pep517_whl/c_driver_test.sh",
+    },
+    target_under_test = ":__toolchain_env_fixture",
+)
+
+pep517_native_whl_disabled_cxx_test(
+    name = "disabled_cxx_test",
+    expected_tool_errors = {
+        "CXX": "C++ toolchain does not enable the c++-compile action required for CXX",
+    },
+    expected_tools = {
+        "CC": "uv/private/pep517_whl/c_driver_test.sh",
+    },
+    target_under_test = ":__toolchain_env_fixture",
+)
+
+pep517_native_whl(
+    name = "__missing_cxx_override_fixture",
+    src = ":__stub_sdist",
+    env = {"CXX": "explicit-c++"},
+    tags = ["manual"],
+    tool = ":__stub_tool",
+    version = "0.0.1",
+)
+
+pep517_native_whl_missing_cxx_test(
+    name = "missing_cxx_override_test",
+    expected_env = {"CXX": "explicit-c++"},
+    expected_tools = {
+        "CC": "uv/private/pep517_whl/c_driver_test.sh",
+    },
+    target_under_test = ":__missing_cxx_override_fixture",
+)
+
+pep517_native_whl(
+    name = "__same_driver_gcc_override_fixture",
+    src = ":__stub_sdist",
+    env = {
+        "AR": "explicit-ar --mode",
+        "CXX": "explicit-c++",
+        "LD": "explicit-ld --mode",
+    },
+    tags = ["manual"],
+    tool = ":__stub_tool",
+    version = "0.0.1",
+)
+
+pep517_native_whl_same_driver_gcc_test(
+    name = "same_driver_gcc_override_test",
+    expected_env = {
+        "AR": "explicit-ar --mode",
+        "CXX": "explicit-c++",
+        "LD": "explicit-ld --mode",
+    },
+    expected_tools = {
+        "CC": "uv/private/pep517_whl/c_driver_test.sh",
+    },
+    target_under_test = ":__same_driver_gcc_override_fixture",
 )
 
 bzl_library(
