@@ -381,6 +381,7 @@ def _layer_aspect_impl(target, ctx):
     kind = ctx.rule.kind
     is_binary = (
         PyInfo in target and
+        DefaultInfo in target and
         target[DefaultInfo].files_to_run.executable != None
     )
 
