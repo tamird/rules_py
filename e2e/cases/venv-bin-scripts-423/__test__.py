@@ -25,8 +25,9 @@ assert os.access(roll_script, os.X_OK), (
 
 # Verify it actually runs
 result = subprocess.run(
-    [roll_script, "1d6"],
+    ["roll", "1d6"],
     capture_output=True,
+    env={"PATH": bin_dir},
     text=True,
 )
 assert result.returncode == 0, (
