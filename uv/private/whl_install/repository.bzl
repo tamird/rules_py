@@ -70,6 +70,15 @@ def parse_record_path(line):
 
     return "".join(path)
 
+def site_packages_segments(path, data_directory):
+    """Map a RECORD path to its installed site-packages segments."""
+    segments = path.split("/")
+    if segments[0] != data_directory:
+        return segments
+    if len(segments) < 3 or segments[1] not in ("purelib", "platlib"):
+        return []
+    return segments[2:]
+
 def _find_whl_file(repository_ctx, whl_label):
     """Resolve an http_file-style wheel label to the actual .whl path on disk.
 
@@ -108,28 +117,20 @@ def _extract_wheel_metadata(repository_ctx, whl_label):
                  label_list attr so Bazel wires up repo visibility.
 
     Returns:
-      Tuple (top_levels_set, regular_top_levels_set, console_scripts_set,
+      Tuple (whl_basename, top_levels_set, directory_top_levels_set,
+             regular_top_levels_set, console_scripts,
              namespace_entries_set, dirs_set, init_dirs_set):
-        * top_levels_set: dict[name → True] — all first-path-segment
-          names in RECORD (excluding `*.data/` staging entries).
-        * regular_top_levels_set: subset that had an `__init__.py` at
-          depth 1, i.e. regular packages. Its complement (within
-          top_levels_set, minus `.dist-info/`) is the PEP 420 namespace
-          set for this wheel.
-        * console_scripts_set: dict[script_name → "name=module:func"].
-        * namespace_entries_set: dict[path → True] — for each top-level
-          that looks like a PEP 420 namespace in THIS wheel, the
-          `/`-joined paths of the concrete entries beneath it: the
-          shallowest directory holding a direct `__init__.py` (recursing
-          through nested namespace dirs like `google/cloud/`), or the
-          file itself for plain modules / data files. Lets venv assembly
-          materialise a merged namespace dir out of per-entry symlinks.
-        * dirs_set: dict[path → True] — every directory implied by a
-          RECORD entry, as a `/`-joined relative path.
-        * init_dirs_set: dict[path → True] — subset of dirs_set that
-          directly contain an `__init__.py` (regular packages). Powers
-          the per-wheel namespace_dirs / regular_roots derivation, which
-          venv assembly uses to detect regular packages spanning wheels.
+        * whl_basename: basename of the wheel file resolved from whl_label.
+        * top_levels_set: all immediate names installed into site-packages.
+        * directory_top_levels_set: subset installed as directories.
+        * regular_top_levels_set: subset with a direct `__init__.py`, plus
+          top-level modules.
+        * console_scripts: canonical "name=module:func" entries.
+        * namespace_entries_set: shallowest concrete entries beneath each
+          namespace top-level.
+        * dirs_set: every directory implied by RECORD.
+        * init_dirs_set: subset of dirs_set that directly contain an
+          `__init__.py`.
     """
     whl_path = _find_whl_file(repository_ctx, whl_label)
     if whl_path == None:
@@ -176,10 +177,12 @@ def _extract_wheel_metadata(repository_ctx, whl_label):
     if entry_points_path.exists:
         entry_points = repository_ctx.read(entry_points_path)
     repository_ctx.delete(metadata_dir)
+    data_directory = metadata_directory[:-len(".dist-info")] + ".data"
 
     # RECORD: authoritative list of every installed file. First path segment
-    # = top-level name, excluding the wheel's `*.data/` staging area.
+    # = top-level name after translating wheel install-scheme paths.
     top_levels_set = {}
+    directory_top_levels = {}
 
     # Tracks which top-levels contain a direct `<toplevel>/__init__.py` —
     # i.e., are regular packages. The complement (top_levels that never
@@ -198,25 +201,11 @@ def _extract_wheel_metadata(repository_ctx, whl_label):
             path = parse_record_path(line)
             if not path:
                 continue
-            segments = path.split("/")
-            first_segment = segments[0]
-
-            # `*.data/` files (PEP 427) are routed to
-            # data/scripts/headers/purelib/platlib under sys.prefix at
-            # install time. Exclude from the site-packages top-level list.
-            #
-            # KNOWN LIMITATION: `*.data/purelib/` and `*.data/platlib/`
-            # ARE overlaid into site-packages on a real install, so a wheel
-            # that ships a namespace contribution there (e.g.
-            # `foo.data/purelib/ns/sub/`) won't have `ns` discovered as a
-            # top-level or `ns/sub` as a namespace entry — that
-            # contribution stays invisible to the concrete merge (and to
-            # static tools). Rare in practice (wheels overwhelmingly ship
-            # packages at the archive root); handling it would mean
-            # rewriting the `*.data/{purelib,platlib}/` prefix to
-            # site-packages-relative before deriving top-levels/entries.
-            if first_segment.endswith(".data"):
+            segments = site_packages_segments(path, data_directory)
+            if not segments:
                 continue
+
+            first_segment = segments[0]
 
             # Filter RECORD entries that escape the install root. Some
             # wheels (notably setuptools-family) emit lines like
@@ -232,6 +221,8 @@ def _extract_wheel_metadata(repository_ctx, whl_label):
             if first_segment.startswith("/"):
                 continue
             top_levels_set[first_segment] = True
+            if len(segments) > 1:
+                directory_top_levels[first_segment] = True
 
             # Single-file modules (e.g. `six.py` at top level) aren't
             # namespace packages — treat them as regular.
@@ -287,14 +278,28 @@ def _extract_wheel_metadata(repository_ctx, whl_label):
                 continue
             name, _, target = line.partition("=")
             name = name.strip()
-            target = target.strip()
-            if not name or ":" not in target:
+            module, _, function_and_extras = target.strip().partition(":")
+
+            # Legacy entry-point extras may be parsed and ignored:
+            # https://packaging.python.org/en/latest/specifications/entry-points/#data-model
+            function = function_and_extras.split("[")[0].strip()
+            module = module.strip()
+            if not name or not module or not function:
                 continue
 
             # Normalise to "name=module:func" so downstream parsing is trivial.
-            console_scripts[name] = "{}={}".format(name, target)
+            console_scripts[name] = "{}={}:{}".format(name, module, function)
 
-    return top_levels_set, regular_top_levels, console_scripts, namespace_entries, dirs_set, init_dirs
+    return (
+        whl_path.basename,
+        top_levels_set,
+        directory_top_levels,
+        regular_top_levels,
+        sorted(console_scripts.values()),
+        namespace_entries,
+        dirs_set,
+        init_dirs,
+    )
 
 def _namespace_dirs_and_roots(dirs_set, init_dirs, namespace_top_levels_set):
     """Split a wheel's directory skeleton into the implicit-namespace dirs
@@ -639,7 +644,7 @@ filegroup(
     # JSON-encoded string of labels) because only the former adds the
     # wheel repos to our visibility so `rctx.path(Label(...))` can
     # resolve. `whl_files` mirrors the truthy `whls` values in order, so
-    # pair them up by index to recover the filename ↔ label association.
+    # pair them up by index to recover the target ↔ label association.
     # Both lists are generated together by the hub rule from the same
     # source data, so the ordering invariant is maintained at the point
     # of production and does not depend on runtime dict iteration order.
@@ -652,17 +657,18 @@ filegroup(
         whl_file_index += 1
 
     top_levels_by_whl = {}
+    directory_top_levels_by_whl = {}
     namespace_top_levels_by_whl = {}
     namespace_entries_by_whl = {}
     namespace_dirs_by_whl = {}
     regular_roots_by_whl = {}
     console_scripts_by_whl = {}
-    for whl_name, target in prebuilds.items():
-        if not target or target not in arm_targets:
+    for target, whl_file_label in whl_file_labels.items():
+        if target not in arm_targets:
             continue
-        tls, regular, css, ns_entries, dirs_set, init_dirs = _extract_wheel_metadata(
+        whl_name, tls, directory_tls, regular, css, ns_entries, dirs_set, init_dirs = _extract_wheel_metadata(
             repository_ctx,
-            whl_file_labels[target],
+            whl_file_label,
         )
         if tls:
             top_levels_by_whl[whl_name] = sorted(tls.keys())
@@ -698,19 +704,22 @@ filegroup(
                     namespace_dirs_by_whl[whl_name] = ndirs
                 if rroots:
                     regular_roots_by_whl[whl_name] = rroots
-        if css:
-            console_scripts_by_whl[whl_name] = sorted(css.values())
+        if directory_tls:
+            directory_top_levels_by_whl[whl_name] = sorted(directory_tls.keys())
+        console_scripts_by_whl[whl_name] = css
 
     install_attrs = """
     src = ":whl",
     compile_pyc = {compile_pyc},
     pyc_invalidation_mode = {pyc_invalidation_mode},
     top_levels = {top_levels},
+    directory_top_levels = {directory_top_levels},
     namespace_top_levels = {namespace_top_levels},
     console_scripts = {console_scripts},""".format(
         compile_pyc = compile_pyc_select,
         pyc_invalidation_mode = pyc_invalidation_mode_select,
         top_levels = indent(pprint(top_levels_by_whl), " " * 4).lstrip(),
+        directory_top_levels = indent(pprint(directory_top_levels_by_whl), " " * 4).lstrip(),
         namespace_top_levels = indent(pprint(namespace_top_levels_by_whl), " " * 4).lstrip(),
         console_scripts = indent(pprint(console_scripts_by_whl), " " * 4).lstrip(),
     )

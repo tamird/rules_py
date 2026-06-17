@@ -39,12 +39,20 @@ whl_install(
             "azure_core-1.38.0.dist-info",
         ],
     },
+    directory_top_levels = {
+        "azure_core-1.38.0-py3-none-any.whl": [
+            "azure",
+            "azure_core-1.38.0.dist-info",
+        ],
+    },
     namespace_top_levels = {
         "azure_core-1.38.0-py3-none-any.whl": [
             "azure",
         ],
     },
-    console_scripts = {},
+    console_scripts = {
+        "azure_core-1.38.0-py3-none-any.whl": [],
+    },
     namespace_entries = {
         "azure_core-1.38.0-py3-none-any.whl": [
             "azure/core",

@@ -233,6 +233,10 @@ under `<venv>/bin/<name>` so `subprocess.run(["<name>", ...])` works.
 """,
             default = {},
         ),
+        "directory_top_levels": attr.string_list_dict(
+            doc = "Per-wheel subset of `top_levels` installed as directories.",
+            default = {},
+        ),
         "namespace_top_levels": attr.string_list_dict(
             doc = """Per-wheel subset of `top_levels` that are PEP 420 namespace packages, keyed by wheel file basename.
 
