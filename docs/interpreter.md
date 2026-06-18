@@ -222,6 +222,30 @@ The following platforms are registered by default:
 Not all Python versions are available on all platforms. Unavailable combinations
 are silently skipped during toolchain resolution.
 
+## Local interpreters
+
+Use `interpreters.local()` to register an interpreter that is already installed
+on the host. Native extensions must compile and link against headers and
+libraries for that same Python build, so a local runtime can name the underlying
+target created by `rules_python`'s `py_cc_toolchain`:
+
+```starlark
+interpreters.local(
+    interpreter_path = "/opt/python/bin/python3",
+    python_version = "3.12",
+    py_cc_toolchain = "//python:local_py_cc_toolchain",
+)
+```
+
+When `py_cc_toolchain` is set, `python_version` is required. The C toolchain's
+provider must report the same `major.minor` version, which rejects cross-version
+pairings. The label must still identify headers and libraries from the same
+Python build as the local interpreter.
+
+Omitting `py_cc_toolchain` still supports pure-Python targets. A native target
+fails C toolchain resolution when Bazel selects that local runtime instead of
+falling back to a C toolchain from a different Python distribution.
+
 ## Compatibility with rules_python
 
 This interpreter provisioning is designed to coexist with `rules_python`:

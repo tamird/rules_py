@@ -1,5 +1,17 @@
-def main():
-    print("Running successfully!")
+import subprocess
+import sys
 
-if __name__ == "__main__":
-    main()
+import native_module
+
+
+assert native_module.answer() == 42
+
+subprocess.run(
+    [
+        sys.executable,
+        "-I",
+        "-c",
+        "import native_module; assert native_module.answer() == 42",
+    ],
+    check=True,
+)

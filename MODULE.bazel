@@ -71,6 +71,15 @@ interpreters.configure(
 interpreters.toolchain(
     python_version = "3.13",
 )
+
+# Keep an unavailable local runtime in the generated-toolchain snapshot. Its
+# registrations must remain gated by the local repository's availability, and
+# its C toolchain label must survive extension/repository serialization.
+interpreters.local(
+    interpreter_path = "/nonexistent/aspect_rules_py_snapshot_python",
+    py_cc_toolchain = "//py/private/interpreter:_local_py_cc_toolchain_3_13",
+    python_version = "3.13",
+)
 use_repo(
     interpreters,
     "python_interpreters",

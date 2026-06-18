@@ -288,6 +288,8 @@ def _python_interpreters_impl(module_ctx):
         for tag in mod.tags.local:
             if not tag.interpreter_path and not tag.env:
                 fail("interpreters.local() requires either interpreter_path or env")
+            if tag.py_cc_toolchain and not tag.python_version:
+                fail("interpreters.local(py_cc_toolchain = ...) requires python_version")
 
             # Build a deterministic repo name from the path or env var
             if tag.interpreter_path:
@@ -312,6 +314,8 @@ def _python_interpreters_impl(module_ctx):
             toolchain_entries.append(json.encode({
                 "name": repo_name,
                 "repo": repo_name,
+                "is_local": True,
+                "py_cc_toolchain": str(tag.py_cc_toolchain) if tag.py_cc_toolchain else "",
                 "python_version": local_version,
                 "freethreaded": False,
                 "compatible_with": [],
@@ -377,6 +381,8 @@ def _python_interpreters_impl(module_ctx):
                 toolchain_entries.append(json.encode({
                     "name": repo_name,
                     "repo": repo_name,
+                    "is_local": False,
+                    "py_cc_toolchain": "@{}//:py_cc_toolchain".format(repo_name),
                     "python_version": major_minor,
                     "freethreaded": config_info["freethreaded"],
                     "compatible_with": platform_info["compatible_with"],
@@ -556,6 +562,9 @@ If the variable is unset, the toolchain is registered but inactive (never matche
 Override the detected Python version. If omitted, the interpreter is probed
 at repository-rule evaluation time to determine its version.
 """,
+        ),
+        "py_cc_toolchain": attr.label(
+            doc = "Underlying target created by rules_python's py_cc_toolchain for this interpreter. When omitted, C toolchain resolution fails rather than falling back to a PBS toolchain. Requires python_version.",
         ),
         "target_compatible_with": attr.string_list(
             default = [],
