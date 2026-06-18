@@ -214,21 +214,34 @@ def incompatible_with(venvs, extra_constraints = []):
     content.append("""
 load("@rules_python//python:pip.bzl", "pip_utils")
 
-all_requirements = {all_requirements}
+def _requirement(name):
+    return "@@{repo_name}//{{0}}:pkg".format(name)
+
+def requirement(name):
+    return _requirement(pip_utils.normalize_name(name))
+
+all_requirements = [_requirement(name) for name in {all_requirement_names}]
+
+all_requirements_by_dep_group = {{
+    dep_group: [_requirement(name) for name in names]
+    for dep_group, names in {requirement_names_by_dep_group}.items()
+}}
 
 all_whl_requirements_by_package = {all_whl_requirements_by_package}
 
 all_whl_requirements = all_whl_requirements_by_package.values()
 
 all_data_requirements = all_requirements
-
-def requirement(name):
-    return "@@{repo_name}//{{0}}:pkg".format(pip_utils.normalize_name(name))
 """.format(
-        all_requirements = repr([
-            "@@{0}//{1}:pkg".format(repository_ctx.name, name)
-            for name in package_names
-        ]),
+        all_requirement_names = repr(package_names),
+        requirement_names_by_dep_group = repr({
+            dep_group: [
+                name
+                for name in package_names
+                if dep_group in packages[name]
+            ]
+            for dep_group in sorted(repository_ctx.attr.configurations)
+        }),
         all_whl_requirements_by_package = repr({
             name: "@@{0}//{1}:whl".format(repository_ctx.name, name)
             for name in package_names

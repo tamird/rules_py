@@ -138,6 +138,24 @@ py_binary(
 )
 ```
 
+Targets that need every requirement in one dependency group can use the
+group-specific lists generated in `requirements.bzl`:
+
+```starlark
+load("@pypi//:requirements.bzl", "all_requirements_by_dep_group")
+
+py_binary(
+    name = "all_vendored",
+    dep_group = "vendored_say",
+    deps = all_requirements_by_dep_group["vendored_say"],
+)
+```
+
+`all_requirements` remains the hub-wide union for compatibility with
+`rules_python`. Under a dependency-group transition, that union may contain
+targets which are incompatible with the selected group, so use the
+group-specific list when the consuming target sets `dep_group`.
+
 ## The `uv` toolchain
 
 `uv_bin.toolchain()` fetches the UV binary for the required platform(s) and
