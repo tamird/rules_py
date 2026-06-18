@@ -114,7 +114,7 @@ def _py_unpacked_wheel_impl(ctx):
             console_scripts = tuple(ctx.attr.console_scripts),
             # See whl_install rule for the rationale.
             install_tree = unpack_directory,
-        )]),
+        )], order = "postorder"),
     ))
 
     return providers

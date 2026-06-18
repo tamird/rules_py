@@ -27,10 +27,10 @@ distutils, etc.) treat it as a real venv:
                                                 or a merged regular package
         <dist>-<ver>.dist-info                  physical venv metadata symlink
 
-Most of the tree is declared as individual files and symlinks. Only a regular
-package that spans namespace wheels becomes a TreeArtifact; duplicate regular
-packages follow the configured collision policy and retain one wheel-local
-winner.
+Most of the tree is declared as individual files and symlinks. A regular
+package spanning namespace wheels, or a colliding directory with unknown
+topology, becomes a TreeArtifact. Metadata-known duplicate regular packages
+retain the last wheel-local winner under the configured collision policy.
 """
 
 load("@bazel_lib//lib:paths.bzl", "relative_file", "to_rlocation_path")
@@ -104,15 +104,16 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
           `jaraco/functools`) for merged namespace packages.
       fully_covered_site_pkgs: dict[str, True] — site-packages paths whose
           declared top-levels ALL ended up claimed by them (directly or
-          via a complete namespace merge) — safe to drop from the .pth
-          fallback.
+          via a complete physical or namespace merge) — safe to drop from
+          the .pth fallback.
       console_scripts_map: dict {script_name: struct(module, func)} after
           collision resolution.
       merge_groups: list of struct(root, site_packages_list,
-          missing_required_site_packages) — top-level namespace package
-          dirs containing a regular package that spans wheels, with every
-          materialized claimant's site-packages path in first-wins priority
-          order and any required claimant that cannot be materialized.
+          missing_required_site_packages) — top-level directories that need a
+          physical merge because their topology is unknown or a regular
+          package spans wheels, with every materialized claimant's
+          site-packages path in last-wins priority order and any required
+          claimant that cannot be materialized.
     """
 
     def _complain(what, name, a, b):
@@ -185,8 +186,38 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
             all([c.is_directory for c in distinct_sp.values()]) and
             not all([c.topology_known for c in distinct_sp.values()])
         ):
-            for c in distinct_sp.values():
-                skipped_per_wheel.setdefault(c.site_packages, {})[tl] = True
+            unknown_claimants = distinct_sp.values()
+            winner = unknown_claimants[0]
+            for c in unknown_claimants[1:]:
+                _complain(
+                    "top-level with unknown topology",
+                    tl,
+                    winner.site_packages,
+                    c.site_packages,
+                )
+                winner = c
+
+            # A sys.path fallback cannot reproduce flat-install precedence:
+            # site.addsitedir appends each wheel root, so the first regular
+            # package would still win. Merge the complete top-level trees in
+            # dependency order instead; site_merge installs later files over
+            # earlier files and therefore preserves the collision contract
+            # without needing to know the package topology.
+            materialized = []
+            missing_required = []
+            for c in unknown_claimants:
+                wheel = wheel_by_sp[c.site_packages]
+                if getattr(wheel, "install_tree", None) != None:
+                    materialized.append(c.site_packages)
+                    ns_covered_per_wheel.setdefault(c.site_packages, {})[tl] = True
+                else:
+                    skipped_per_wheel.setdefault(c.site_packages, {})[tl] = True
+                    missing_required.append(c.site_packages)
+            conflicted_top_levels[tl] = struct(
+                missing_required_site_packages = missing_required,
+                root = tl,
+                site_packages_list = materialized,
+            )
             continue
 
         all_namespace = all([c.is_ns for c in claimants])
@@ -260,14 +291,13 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
             if not entried:
                 continue
 
-            # Per-entry merge over the entries-bearing claimants: first
-            # wheel to claim an entry wins. A later distinct wheel shipping
+            # Per-entry merge over the entries-bearing claimants: the last
+            # wheel to claim an entry wins. An earlier distinct wheel shipping
             # the same entry is a genuine collision (same subpackage twice)
             # — complain per policy and leave the loser on the .pth path.
             # (An entryless claimant shipping the same subpackage can't be
-            # detected here; the concrete symlink wins deterministically
-            # over its .pth portion — the same first-on-path resolution the
-            # old all-.pth path gave, only now order-independent.)
+            # detected here; the concrete site-packages symlink wins
+            # deterministically over its .pth portion.)
             entry_owner = {}
             for c in entried:
                 for entry in c.ns_entries:
@@ -276,7 +306,8 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
                         entry_owner[entry] = c
                     elif prior.site_packages != c.site_packages:
                         _complain("namespace entry", entry, prior.site_packages, c.site_packages)
-                        skipped_per_wheel.setdefault(c.site_packages, {})[tl] = True
+                        skipped_per_wheel.setdefault(prior.site_packages, {})[tl] = True
+                        entry_owner[entry] = c
 
             # A nested-namespace mismatch (wheel A ships
             # `google/cloud/__init__.py` while wheel B treats
@@ -326,19 +357,21 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
                     ns_covered_per_wheel.setdefault(c.site_packages, {})[tl] = True
             continue
 
-        first = claimants[0]
-        top_level_to_site_pkgs[tl] = first.site_packages
-        seen_losers = {}
+        winner = claimants[0]
+        seen = {winner.site_packages: True}
         for c in claimants[1:]:
-            if c.site_packages == first.site_packages or c.site_packages in seen_losers:
+            if c.site_packages in seen:
                 continue
-            _complain("top-level", tl, first.site_packages, c.site_packages)
-            seen_losers[c.site_packages] = True
-            skipped_per_wheel.setdefault(c.site_packages, {})[tl] = True
+            _complain("top-level", tl, winner.site_packages, c.site_packages)
+            skipped_per_wheel.setdefault(winner.site_packages, {})[tl] = True
+            winner = c
+            seen[c.site_packages] = True
+        top_level_to_site_pkgs[tl] = winner.site_packages
 
-    # Pass 2a: one concrete output per conflicted top-level namespace. Merging
-    # every claimant preserves unrelated namespace portions for static tools
-    # and avoids sibling actions materializing a shared parent directory.
+    # Pass 2a: one concrete output per conflicted top-level. Merging every
+    # claimant preserves unrelated namespace portions for static tools,
+    # implements last-wins for unknown topology, and avoids sibling actions
+    # materializing a shared parent directory.
     merge_groups = [conflicted_top_levels[root] for root in sorted(conflicted_top_levels.keys())]
 
     # Pass 2b: console scripts.
@@ -349,14 +382,15 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
             c = claimants[0]
             console_scripts_map[name] = struct(module = c.module, func = c.func)
             continue
-        first = claimants[0]
-        console_scripts_map[name] = struct(module = first.module, func = first.func)
-        seen_losers = {}
+        winner = claimants[0]
+        seen = {winner.site_packages: True}
         for c in claimants[1:]:
-            if c.site_packages == first.site_packages or c.site_packages in seen_losers:
+            if c.site_packages in seen:
                 continue
-            _complain("console script", name, first.site_packages, c.site_packages)
-            seen_losers[c.site_packages] = True
+            _complain("console script", name, winner.site_packages, c.site_packages)
+            winner = c
+            seen[c.site_packages] = True
+        console_scripts_map[name] = struct(module = winner.module, func = winner.func)
 
     # Pass 3: wheels fully covered by direct (or complete per-entry
     # namespace) symlinks.
@@ -442,9 +476,9 @@ def assemble_venv(
         source (usually `ctx.file._virtualenv_shim`).
       site_merge_script_py: File — the site_merge.py tool source
         (usually `ctx.file._site_merge_script`). Only needed when a regular
-        package spans wheels; the merge action also requires the rule to
-        declare the (optional) EXEC_TOOLS_TOOLCHAIN for an exec-configuration
-        interpreter.
+        package spans wheels or a colliding directory has unknown topology;
+        the merge action also requires the rule to declare the (optional)
+        EXEC_TOOLS_TOOLCHAIN for an exec-configuration interpreter.
       venv_name: Optional str — explicit venv dir basename. Defaults to
         "." + safe_name + ".venv" when unset.
 
@@ -604,16 +638,16 @@ def assemble_venv(
             ))
         declared.append(out)
 
-    # A regular package spanning namespace wheels makes its complete top-level
-    # package one TreeArtifact directly under site-packages. This gives Bazel
-    # one action owner for the namespace directory, while provider metadata
-    # classifies the generated content for packaging consumers.
+    # Each physically merged top-level becomes one TreeArtifact directly under
+    # site-packages. This gives Bazel one action owner for a regular package
+    # spanning namespace wheels or a collision with unknown topology, while
+    # provider metadata classifies the generated content for packagers.
     #
     # The merge runs as a build action under the exec-configuration
-    # interpreter (same shape as WhlInstall's unpack action). A claimant
-    # involved in the conflict needs an install tree because omitting it would
-    # silently produce an incomplete directory; unrelated legacy claimants
-    # remain on the .pth fallback.
+    # interpreter (same shape as WhlInstall's unpack action). A required
+    # claimant needs an install tree because omitting it would silently produce
+    # an incomplete directory; unrelated legacy claimants remain on the .pth
+    # fallback.
     manifest_only_import_roots = []
     dependency_files = []
     for group in merge_groups:

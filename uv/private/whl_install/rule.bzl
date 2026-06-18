@@ -186,7 +186,7 @@ def _whl_install(ctx):
             # symlinks inside the venv can be intra-venv relative
             # (identical resolution in bazel-bin and runfiles).
             install_tree = install_dir,
-        )]),
+        )], order = "postorder"),
     ))
 
     return providers

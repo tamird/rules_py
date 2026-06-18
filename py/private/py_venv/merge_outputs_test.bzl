@@ -2,15 +2,22 @@
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
 load("@rules_python//python:defs.bzl", "PyInfo")
-load("//py:defs.bzl", "py_binary", "py_image_layer", "py_venv")
+load("//py:defs.bzl", "py_binary", "py_image_layer", "py_library", "py_test", "py_venv")
 load("//py/private:providers.bzl", "PyVenvLayoutInfo", "PyWheelsInfo")
 
 def _wheel_impl(ctx):
     install_tree = ctx.actions.declare_directory(ctx.label.name + ".install")
     ctx.actions.run_shell(
         outputs = [install_tree],
-        command = "mkdir -p \"$1\"",
-        arguments = [install_tree.path],
+        command = """
+set -eu
+mkdir -p "$1"
+if [ -n "$2" ]; then
+    mkdir -p "$1/lib/python3.9/site-packages/shared"
+    printf 'VALUE = "%s"\n' "$2" > "$1/lib/python3.9/site-packages/shared/collision.py"
+fi
+""",
+        arguments = [install_tree.path, ctx.attr.collision_value],
     )
     site_packages = "/".join([
         ctx.workspace_name,
@@ -42,13 +49,14 @@ def _wheel_impl(ctx):
             has_py3_only_sources = True,
             uses_shared_libraries = False,
         ),
-        PyWheelsInfo(wheels = depset([struct(**wheel)])),
+        PyWheelsInfo(wheels = depset([struct(**wheel)], order = "postorder")),
     ]
 
 # Match the production wheel producer kind consumed by _layer_aspect.
 whl_install = rule(
     implementation = _wheel_impl,
     attrs = {
+        "collision_value": attr.string(),
         "expose_install_tree": attr.bool(default = True),
         "directory_top_levels": attr.string_list(),
         "namespace_dirs": attr.string_list(),
@@ -222,25 +230,39 @@ def _native_sibling_layout_test_impl(ctx):
         if action.mnemonic == "PySiteMerge"
     ]
     asserts.equals(env, 0, len(merge_actions))
-    links = target[PyVenvLayoutInfo].wheel_links.to_list()
-    link_basenames = [link.link.basename for link in links]
-    asserts.equals(env, 1, len([name for name in link_basenames if name == "cv2"]))
-    asserts.true(env, "opencv_python.libs" in link_basenames)
-    asserts.true(env, "opencv_python_headless.libs" in link_basenames)
+    links = {
+        link.install_path.rsplit("/site-packages/", 1)[-1]: link
+        for link in target[PyVenvLayoutInfo].wheel_links.to_list()
+    }
+    asserts.true(env, "cv2" in links)
+    if "cv2" in links:
+        asserts.equals(env, "_native_wheel_headless.install", links["cv2"].install_tree.basename)
+    asserts.true(env, "opencv_python.libs" in links)
+    asserts.true(env, "opencv_python_headless.libs" in links)
+    asserts.equals(env, {
+        "shared/common.pyi": "_native_wheel_headless.install",
+        "shared/from_full.pyi": "_native_wheel_full.install",
+        "shared/from_headless.pyi": "_native_wheel_headless.install",
+    }, {
+        path: link.install_tree.basename
+        for path, link in links.items()
+        if path.startswith("shared/")
+    })
     return analysistest.end(env)
 
 _native_sibling_layout_test = analysistest.make(
     _native_sibling_layout_test_impl,
 )
 
-def _unknown_topology_fallback_test_impl(ctx):
+def _unknown_topology_merge_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
-    actions = analysistest.target_actions(env)
-    asserts.false(env, any([
-        action.mnemonic == "PySiteMerge"
-        for action in actions
-    ]))
+    merge_actions = [
+        action
+        for action in analysistest.target_actions(env)
+        if action.mnemonic == "PySiteMerge"
+    ]
+    asserts.equals(env, 1, len(merge_actions))
     links = target[PyVenvLayoutInfo].wheel_links.to_list()
     asserts.false(env, any([
         link.link.basename == "shared"
@@ -248,7 +270,7 @@ def _unknown_topology_fallback_test_impl(ctx):
     ]))
     pth_actions = [
         action
-        for action in actions
+        for action in analysistest.target_actions(env)
         if any([
             output.basename == target.label.name + ".pth"
             for output in action.outputs.to_list()
@@ -256,12 +278,40 @@ def _unknown_topology_fallback_test_impl(ctx):
     ]
     asserts.equals(env, 1, len(pth_actions))
     if len(pth_actions) == 1:
-        asserts.true(env, "_unknown_topology_known.install" in pth_actions[0].content)
-        asserts.true(env, "_unknown_topology_source.install" in pth_actions[0].content)
+        asserts.false(env, "_unknown_topology_known.install" in pth_actions[0].content)
+        asserts.false(env, "_unknown_topology_source.install" in pth_actions[0].content)
     return analysistest.end(env)
 
-_unknown_topology_fallback_test = analysistest.make(
-    _unknown_topology_fallback_test_impl,
+_unknown_topology_merge_test = analysistest.make(
+    _unknown_topology_merge_test_impl,
+)
+
+def _unknown_topology_error_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "top-level with unknown topology `shared`")
+    return analysistest.end(env)
+
+_unknown_topology_error_test = analysistest.make(
+    _unknown_topology_error_test_impl,
+    expect_failure = True,
+)
+
+def _transitive_collision_order_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    links = [
+        link
+        for link in target[PyVenvLayoutInfo].wheel_links.to_list()
+        if link.install_path.endswith("/site-packages/shared")
+    ]
+    asserts.equals(env, 1, len(links))
+    if len(links) == 1:
+        asserts.equals(env, ctx.attr.expected_install_tree, links[0].install_tree.basename)
+    return analysistest.end(env)
+
+_transitive_collision_order_test = analysistest.make(
+    _transitive_collision_order_test_impl,
+    attrs = {"expected_install_tree": attr.string(mandatory = True)},
 )
 
 def _merge_layer_outputs_test_impl(ctx):
@@ -465,10 +515,17 @@ def merge_outputs_test_suite():
         directory_top_levels = [
             "cv2",
             "opencv_python.libs",
+            "shared",
         ],
+        namespace_entries = [
+            "shared/common.pyi",
+            "shared/from_full.pyi",
+        ],
+        namespace_top_levels = ["shared"],
         top_levels = [
             "cv2",
             "opencv_python.libs",
+            "shared",
         ],
         tags = ["manual"],
     )
@@ -477,10 +534,17 @@ def merge_outputs_test_suite():
         directory_top_levels = [
             "cv2",
             "opencv_python_headless.libs",
+            "shared",
         ],
+        namespace_entries = [
+            "shared/common.pyi",
+            "shared/from_headless.pyi",
+        ],
+        namespace_top_levels = ["shared"],
         top_levels = [
             "cv2",
             "opencv_python_headless.libs",
+            "shared",
         ],
         tags = ["manual"],
     )
@@ -497,14 +561,16 @@ def merge_outputs_test_suite():
 
     whl_install(
         name = "_unknown_topology_known",
+        collision_value = "known",
         directory_top_levels = ["shared"],
-        namespace_entries = ["shared/known"],
+        namespace_entries = ["shared/collision.py"],
         namespace_top_levels = ["shared"],
         top_levels = ["shared"],
         tags = ["manual"],
     )
     whl_install(
         name = "_unknown_topology_source",
+        collision_value = "source",
         directory_top_levels = ["shared"],
         top_levels = ["shared"],
         topology_known = False,
@@ -512,6 +578,7 @@ def merge_outputs_test_suite():
     )
     py_binary(
         name = "_unknown_topology_binary",
+        package_collisions = "warning",
         srcs = ["merge_outputs_test.py"],
         deps = [
             ":_unknown_topology_known",
@@ -519,9 +586,110 @@ def merge_outputs_test_suite():
         ],
         tags = ["manual"],
     )
-    _unknown_topology_fallback_test(
-        name = "unknown_topology_fallback_test",
+    _unknown_topology_merge_test(
+        name = "unknown_topology_merge_test",
         target_under_test = ":_unknown_topology_binary",
+    )
+
+    py_library(
+        name = "_unknown_topology_known_branch",
+        deps = [":_unknown_topology_known"],
+        tags = ["manual"],
+    )
+    py_library(
+        name = "_unknown_topology_source_branch",
+        deps = [":_unknown_topology_source"],
+        tags = ["manual"],
+    )
+    py_test(
+        name = "unknown_topology_forward_precedence_test",
+        srcs = ["unknown_topology_precedence_test.py"],
+        args = ["source"],
+        package_collisions = "ignore",
+        python_version = "3.9",
+        deps = [
+            ":_unknown_topology_known_branch",
+            ":_unknown_topology_source_branch",
+        ],
+    )
+    py_test(
+        name = "unknown_topology_reverse_precedence_test",
+        srcs = ["unknown_topology_precedence_test.py"],
+        args = ["known"],
+        package_collisions = "ignore",
+        python_version = "3.9",
+        deps = [
+            ":_unknown_topology_source_branch",
+            ":_unknown_topology_known_branch",
+        ],
+    )
+
+    py_binary(
+        name = "_unknown_topology_error_binary",
+        package_collisions = "error",
+        srcs = ["merge_outputs_test.py"],
+        deps = [
+            ":_unknown_topology_known",
+            ":_unknown_topology_source",
+        ],
+        tags = ["manual"],
+    )
+    _unknown_topology_error_test(
+        name = "unknown_topology_error_test",
+        target_under_test = ":_unknown_topology_error_binary",
+    )
+
+    whl_install(
+        name = "_precedence_first",
+        directory_top_levels = ["shared"],
+        top_levels = ["shared"],
+        tags = ["manual"],
+    )
+    whl_install(
+        name = "_precedence_last",
+        directory_top_levels = ["shared"],
+        top_levels = ["shared"],
+        tags = ["manual"],
+    )
+    py_library(
+        name = "_precedence_first_branch",
+        deps = [":_precedence_first"],
+        tags = ["manual"],
+    )
+    py_library(
+        name = "_precedence_last_branch",
+        deps = [":_precedence_last"],
+        tags = ["manual"],
+    )
+    py_binary(
+        name = "_precedence_forward_binary",
+        package_collisions = "ignore",
+        srcs = ["merge_outputs_test.py"],
+        deps = [
+            ":_precedence_first_branch",
+            ":_precedence_last_branch",
+        ],
+        tags = ["manual"],
+    )
+    py_binary(
+        name = "_precedence_reverse_binary",
+        package_collisions = "ignore",
+        srcs = ["merge_outputs_test.py"],
+        deps = [
+            ":_precedence_last_branch",
+            ":_precedence_first_branch",
+        ],
+        tags = ["manual"],
+    )
+    _transitive_collision_order_test(
+        name = "transitive_collision_forward_order_test",
+        expected_install_tree = "_precedence_last.install",
+        target_under_test = ":_precedence_forward_binary",
+    )
+    _transitive_collision_order_test(
+        name = "transitive_collision_reverse_order_test",
+        expected_install_tree = "_precedence_first.install",
+        target_under_test = ":_precedence_reverse_binary",
     )
 
     whl_install(
