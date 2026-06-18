@@ -57,36 +57,59 @@ class SiteMergeTest(unittest.TestCase):
             ):
                 merge(root / "output", [first, root / "missing"])
 
-    def test_first_file_wins_over_directory(self):
+    def test_last_directory_wins_over_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             first = root / "first"
             second = root / "second"
             output = root / "output"
             first.mkdir()
-            (first / "entry").write_text("first")
+            first_entry = first / "entry"
+            first_entry.write_text("first")
+            first_entry.chmod(0o444)
             (second / "entry").mkdir(parents=True)
             (second / "entry/child.py").write_text("second")
 
             conflicts = merge(output, [first, second])
 
-            self.assertEqual((output / "entry").read_text(), "first")
+            self.assertEqual((output / "entry/child.py").read_text(), "second")
             self.assertEqual([conflict[0] for conflict in conflicts], [Path("entry")])
 
-    def test_first_directory_wins_over_file(self):
+    def test_last_file_wins_over_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             first = root / "first"
             second = root / "second"
             output = root / "output"
             (first / "entry").mkdir(parents=True)
-            (first / "entry/child.py").write_text("first")
+            first_child = first / "entry/child.py"
+            first_child.write_text("first")
+            first_child.chmod(0o444)
             second.mkdir()
             (second / "entry").write_text("second")
 
             conflicts = merge(output, [first, second])
 
-            self.assertEqual((output / "entry/child.py").read_text(), "first")
+            self.assertEqual((output / "entry").read_text(), "second")
+            self.assertEqual([conflict[0] for conflict in conflicts], [Path("entry")])
+
+    def test_last_file_wins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "first"
+            second = root / "second"
+            output = root / "output"
+            first.mkdir()
+            second.mkdir()
+            first_entry = first / "entry"
+            second_entry = second / "entry"
+            first_entry.write_text("first")
+            first_entry.chmod(0o444)
+            second_entry.write_text("second")
+
+            conflicts = merge(output, [first, second])
+
+            self.assertEqual((output / "entry").read_text(), "second")
             self.assertEqual([conflict[0] for conflict in conflicts], [Path("entry")])
 
 
