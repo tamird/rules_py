@@ -1,7 +1,7 @@
 """Providers to share information between targets in the graph."""
 
 PyWheelsInfo = provider(
-    doc = """Per-wheel metadata used to assemble a Python venv via symlinks at build time.
+    doc = """Per-wheel metadata used to assemble a Python venv at build time.
 
 Each element of `wheels` describes one wheel in the transitive closure of a
 target: the top-level names (packages / modules / *.dist-info directories)
@@ -9,10 +9,9 @@ it installs into `site-packages`, which of those are PEP 420 namespace
 packages, the runfiles-root-relative path to the wheel's site-packages,
 and the wheel's declared console-script entry points.
 
-Downstream rules (notably `py_binary`) use this to create one
-`ctx.actions.symlink` per top-level name, merging wheels into a single
-`site-packages/` tree without invoking a runtime tool, and to generate
-executable wrappers under `<venv>/bin/<name>` for console scripts.
+Downstream rules use this to order wheel import roots, materialize physical
+`py_venv` site-packages trees, merge regular packages that span wheels, and
+generate executable wrappers under `<venv>/bin/<name>` for console scripts.
 """,
     fields = {
         "wheels": """Depset of wheel metadata structs, one per wheel in the transitive closure. Fields:

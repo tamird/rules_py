@@ -111,8 +111,8 @@ def _make_wheels_depset(ctx, extra_transitive = []):
     """Collect PyWheelsInfo.wheels across deps + resolutions.
 
     Used by downstream rules that want a flat list of wheels (with their
-    declared top-level names) in the transitive closure, for building a
-    merged site-packages via symlinks.
+    declared topology and entry points) to order runtime import roots, resolve
+    collisions, and optionally build a physical site-packages layout.
     """
     transitive = [
         target[PyWheelsInfo].wheels

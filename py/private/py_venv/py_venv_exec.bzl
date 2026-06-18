@@ -48,7 +48,7 @@ def _py_direct_impl(ctx):
             "BAZEL_TARGET_NAME": ctx.attr.name,
             "BAZEL_WORKSPACE": ctx.workspace_name,
         },
-        materialize_wheel_tree_aliases = False,
+        physical_layout = False,
         launcher_bootstrap_py = ctx.file._launcher_bootstrap,
         python_wrapper_tmpl = ctx.file._python_wrapper_tmpl,
         standalone_interpreter = not is_windows,

@@ -77,9 +77,9 @@ def _py_unpacked_wheel_impl(ctx):
         label = ctx.label,
     )
 
-    # site_packages_rfpath: runfiles-root-relative path to this wheel's
-    # site-packages/, used by downstream rules to compute symlink targets
-    # for the top-level names declared in `top_levels`.
+    # Runfiles-root-relative wheel import root. Ordinary targets add it to
+    # their runtime import configuration; physical venvs also use it to locate
+    # the top-level entries declared in `top_levels`.
     site_packages_rfpath = paths.join(
         ctx.label.workspace_name if ctx.label.workspace_name else ctx.workspace_name,
         ctx.label.package,
@@ -134,10 +134,11 @@ _attrs = {
     "top_levels": attr.string_list(
         doc = """Complete list of top-level packages / modules / *.dist-info directories the wheel installs into its site-packages.
 
-Downstream rules (such as `py_binary`) use these names to assemble a merged
-`site-packages/` tree via `ctx.actions.symlink`. If left empty (the default),
-they preserve the complete wheel root so imports and `.pth` files remain
-available.
+Physical `py_venv` targets use these names to assemble a merged
+`site-packages/` tree via `ctx.actions.symlink`. Other Python targets use them
+to resolve wheel collisions while importing from complete wheel roots. If left
+empty (the default), downstream rules preserve the complete wheel root so
+imports and `.pth` files remain available.
 
 Typically populated by the `uv` wheel-install repo rule. Hand-written
 `py_unpacked_wheel` targets may populate this to use per-name symlinks.

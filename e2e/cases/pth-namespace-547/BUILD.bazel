@@ -6,6 +6,7 @@ py_test(
     name = "test",
     srcs = ["__test__.py"],
     dep_group = "pth-namespace-547",
+    env = {"EXPECT_PHYSICAL_VENV": "1"},
     expose_venv = True,
     isolated = False,
     main = "__test__.py",
@@ -47,9 +48,9 @@ py_test(
     ],
 )
 
-# Test namespace packages with the legacy py_test (.pth strategy).
+# Test namespace packages with the ordinary wheel-import-root layout.
 py_test(
-    name = "test_legacy",
+    name = "test_ordinary",
     srcs = ["__test__.py"],
     dep_group = "pth-namespace-547",
     main = "__test__.py",
@@ -59,10 +60,9 @@ py_test(
     ],
 )
 
-# Snapshot fixture: minimal 2-contributor case (jaraco-classes +
-# jaraco-functools, both PEP 420 under `jaraco/`). Both wheels are
-# fully covered by the complete directory merge, so the
-# snapshot pins that NEITHER appears in the .pth fallback.
+# Snapshot fixture for the exposed physical layout: jaraco-classes and
+# jaraco-functools are both fully represented by concrete PEP 420 namespace
+# entries, so neither wheel root appears in its .pth fallback.
 extract_venv_pth(
     name = "test.venv.pth",
     venv = ":test.venv",

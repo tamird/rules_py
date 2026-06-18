@@ -83,7 +83,7 @@ def _assemble_shared(ctx):
         include_system_site_packages = ctx.attr.include_system_site_packages,
         include_user_site_packages = ctx.attr.include_user_site_packages,
         default_env = default_env,
-        materialize_wheel_tree_aliases = True,
+        physical_layout = True,
         launcher_bootstrap_py = ctx.file._launcher_bootstrap,
         python_wrapper_tmpl = ctx.file._python_wrapper_tmpl,
         standalone_interpreter = not is_windows,

@@ -2,15 +2,28 @@
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
 load("@rules_python//python:defs.bzl", "PyInfo")
-load("//py:defs.bzl", "py_binary", "py_image_layer", "py_venv")
+load("//py:defs.bzl", "py_binary", "py_image_layer", "py_test", "py_venv")
 load("//py/private:providers.bzl", "PyVenvLayoutInfo", "PyWheelsInfo")
+load("//py/private/toolchain:types.bzl", "EXEC_TOOLS_TOOLCHAIN")
 
 def _wheel_impl(ctx):
     install_tree = ctx.actions.declare_directory(ctx.label.name + ".install")
-    ctx.actions.run_shell(
+    exec_runtime = ctx.toolchains[EXEC_TOOLS_TOOLCHAIN].exec_tools.exec_runtime
+    writer = ctx.file._wheel_writer
+    args = ctx.actions.args()
+    args.add(writer)
+    args.add("--output", install_tree.path)
+    args.add("--files-json", json.encode(ctx.attr.files))
+    ctx.actions.run(
+        executable = exec_runtime.interpreter,
+        arguments = [args],
+        inputs = depset(
+            [writer, exec_runtime.interpreter],
+            transitive = [exec_runtime.files],
+        ),
         outputs = [install_tree],
-        command = "mkdir -p \"$1\"",
-        arguments = [install_tree.path],
+        mnemonic = "PyWheelTestFixture",
+        toolchain = EXEC_TOOLS_TOOLCHAIN,
     )
     site_packages = "/".join([
         ctx.workspace_name,
@@ -49,7 +62,12 @@ def _wheel_impl(ctx):
 whl_install = rule(
     implementation = _wheel_impl,
     attrs = {
+        "_wheel_writer": attr.label(
+            default = "//py/private/py_venv:wheel_writer.py",
+            allow_single_file = True,
+        ),
         "expose_install_tree": attr.bool(default = True),
+        "files": attr.string_dict(),
         "directory_top_levels": attr.string_list(),
         "namespace_dirs": attr.string_list(),
         "namespace_entries": attr.string_list(),
@@ -58,6 +76,7 @@ whl_install = rule(
         "top_levels": attr.string_list(),
         "topology_known": attr.bool(default = True),
     },
+    toolchains = [EXEC_TOOLS_TOOLCHAIN],
 )
 
 def _merge_outputs_test_impl(ctx):
@@ -131,7 +150,7 @@ def _merge_outputs_test_impl(ctx):
         ]
         asserts.equals(env, ctx.attr.expected_metadata_links, len(metadata_links))
         direct_links = [link for link in wheel_links if link.link.basename == "gamma"]
-        asserts.equals(env, 1, len(direct_links))
+        asserts.equals(env, 1 if ctx.attr.expected_wheel_links else 0, len(direct_links))
         if len(direct_links) == 1:
             direct_target = [file for file in wheel_targets if file.basename == "_merge_wheel_direct.install"]
             asserts.equals(env, 1, len(direct_target))
@@ -246,6 +265,63 @@ _native_sibling_layout_test = analysistest.make(
     _native_sibling_layout_test_impl,
 )
 
+def _ordinary_layout_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    actions = analysistest.target_actions(env)
+    asserts.equals(env, 0, len(target[PyVenvLayoutInfo].wheel_links.to_list()))
+
+    site_package_links = [
+        output
+        for action in actions
+        for output in action.outputs.to_list()
+        if output.is_symlink and "/site-packages/" in output.path and output.basename in (
+            "cv2",
+            "opencv_python.libs",
+            "opencv_python_headless.libs",
+            "shared",
+        )
+    ]
+    asserts.equals(env, [], site_package_links)
+
+    output_basenames = {
+        output.basename: True
+        for action in actions
+        for output in action.outputs.to_list()
+    }
+    for basename in (
+        "pyvenv.cfg",
+        "python",
+        "00_aspect_rules_py_startup.pth",
+        "01_aspect_rules_py_imports.pth",
+        "_aspect_rules_py_imports.py",
+        "_aspect_rules_py_startup.py",
+    ):
+        asserts.true(env, basename in output_basenames)
+
+    import_order_actions = [
+        action
+        for action in actions
+        if any([
+            output.basename in (
+                target.label.name + ".pth",
+                "_aspect_rules_py_imports.txt",
+            )
+            for output in action.outputs.to_list()
+        ])
+    ]
+    asserts.equals(env, 2, len(import_order_actions))
+    for action in import_order_actions:
+        content = action.content
+        headless = content.find("_native_wheel_headless.install")
+        full = content.find("_native_wheel_full.install")
+        asserts.true(env, headless >= 0)
+        asserts.true(env, full >= 0)
+        asserts.true(env, headless < full)
+    return analysistest.end(env)
+
+_ordinary_layout_test = analysistest.make(_ordinary_layout_test_impl)
+
 def _unknown_topology_fallback_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
@@ -309,15 +385,15 @@ def _merge_layer_outputs_test_impl(ctx):
         ])
     ]
 
+    expected_overlay_count = 1 if ctx.attr.expected_link_count else 0
     asserts.equals(env, 1, len(dependency_actions))
     asserts.equals(env, 1, len(source_actions))
-    asserts.equals(env, 1, len(overlay_actions))
-    asserts.equals(env, 1, len(overlay_mtree_actions))
+    asserts.equals(env, expected_overlay_count, len(overlay_actions))
+    asserts.equals(env, expected_overlay_count, len(overlay_mtree_actions))
     asserts.true(env, len(tar_actions) > 0)
-    if len(dependency_actions) == 1 and len(source_actions) == 1 and len(overlay_actions) == 1:
+    if len(dependency_actions) == 1 and len(source_actions) == 1:
         dependency_inputs = [file.path for file in dependency_actions[0].inputs.to_list()]
         source_inputs = [file.path for file in source_actions[0].inputs.to_list()]
-        overlay_inputs = [file.path for file in overlay_actions[0].inputs.to_list()]
         merged_dependencies = [
             path
             for path in dependency_inputs
@@ -328,6 +404,8 @@ def _merge_layer_outputs_test_impl(ctx):
         asserts.false(env, any([path in merged_dependency_paths for path in source_inputs]))
         asserts.false(env, any(["/_wheels/" in path for path in source_inputs]))
         asserts.false(env, any([path.endswith("/site-packages/gamma") for path in source_inputs]))
+    if len(overlay_actions) == 1:
+        overlay_inputs = [file.path for file in overlay_actions[0].inputs.to_list()]
         asserts.false(env, any([path.endswith(".install") for path in overlay_inputs]))
         asserts.false(env, any([path.endswith("/site-packages/gamma") for path in overlay_inputs]))
     if len(overlay_mtree_actions) == 1:
@@ -448,7 +526,7 @@ def merge_outputs_test_suite():
         name = "merge_outputs_test",
         expected_metadata_links = 0,
         expected_wheel_aliases = 0,
-        expected_wheel_links = 1,
+        expected_wheel_links = 0,
         target_under_test = ":_merge_outputs_binary",
     )
     _merge_outputs_test(
@@ -464,7 +542,7 @@ def merge_outputs_test_suite():
     )
     _merge_layer_outputs_test(
         name = "merge_layer_outputs_test",
-        expected_link_count = 1,
+        expected_link_count = 0,
         target_under_test = ":_merge_outputs_layers",
     )
     _merge_layer_outputs_test(
@@ -517,9 +595,74 @@ def merge_outputs_test_suite():
         deps = [":_native_wheel_full", ":_native_wheel_headless"],
         tags = ["manual"],
     )
+    py_venv(
+        name = "_native_sibling_venv",
+        srcs = ["merge_outputs_test.py"],
+        deps = [":_native_wheel_full", ":_native_wheel_headless"],
+        tags = ["manual"],
+    )
+    _ordinary_layout_test(
+        name = "ordinary_layout_test",
+        target_under_test = ":_native_sibling_binary",
+    )
     _native_sibling_layout_test(
         name = "native_sibling_layout_test",
-        target_under_test = ":_native_sibling_binary",
+        target_under_test = ":_native_sibling_venv",
+    )
+
+    whl_install(
+        name = "_runtime_wheel_first",
+        directory_top_levels = [
+            "collision",
+            "runtime_namespace",
+            "runtime_wheel_first-1.0.dist-info",
+        ],
+        files = {
+            "lib/python3/site-packages/collision/__init__.py": "WINNER = 'first'\n",
+            "lib/python3/site-packages/runtime_namespace/first.py": "VALUE = 'first'\n",
+            "lib/python3/site-packages/runtime_wheel_first-1.0.dist-info/METADATA": "Metadata-Version: 2.1\nName: runtime-wheel-first\nVersion: 1.0\n",
+        },
+        namespace_entries = ["runtime_namespace/first.py"],
+        namespace_top_levels = ["runtime_namespace"],
+        top_levels = [
+            "collision",
+            "runtime_namespace",
+            "runtime_wheel_first-1.0.dist-info",
+        ],
+        tags = ["manual"],
+    )
+    whl_install(
+        name = "_runtime_wheel_second",
+        directory_top_levels = [
+            "collision",
+            "runtime_namespace",
+            "runtime_wheel_second-2.0.dist-info",
+        ],
+        files = {
+            "lib/python3/site-packages/collision/__init__.py": "WINNER = 'second'\n",
+            "lib/python3/site-packages/runtime_entry.py": "def value():\n    return 'second'\n",
+            "lib/python3/site-packages/runtime_namespace/second.py": "VALUE = 'second'\n",
+            "lib/python3/site-packages/runtime_wheel_second-2.0.dist-info/METADATA": "Metadata-Version: 2.1\nName: runtime-wheel-second\nVersion: 2.0\n",
+            "lib/python3/site-packages/runtime_wheel_second-2.0.dist-info/entry_points.txt": "[runtime.group]\nsecond = runtime_entry:value\n",
+        },
+        namespace_entries = ["runtime_namespace/second.py"],
+        namespace_top_levels = ["runtime_namespace"],
+        top_levels = [
+            "collision",
+            "runtime_entry.py",
+            "runtime_namespace",
+            "runtime_wheel_second-2.0.dist-info",
+        ],
+        tags = ["manual"],
+    )
+    py_test(
+        name = "ordinary_runtime_test",
+        srcs = ["ordinary_runtime_test.py"],
+        package_collisions = "ignore",
+        deps = [
+            ":_runtime_wheel_first",
+            ":_runtime_wheel_second",
+        ],
     )
 
     whl_install(
