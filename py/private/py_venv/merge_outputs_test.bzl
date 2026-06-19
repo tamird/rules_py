@@ -286,6 +286,51 @@ _unknown_topology_merge_test = analysistest.make(
     _unknown_topology_merge_test_impl,
 )
 
+def _mixed_topology_merge_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    merge_actions = [
+        action
+        for action in analysistest.target_actions(env)
+        if action.mnemonic == "PySiteMerge"
+    ]
+    asserts.equals(env, 1, len(merge_actions))
+    if len(merge_actions) == 1:
+        source_trees = [
+            merge_actions[0].argv[i + 1].split("/lib/", 1)[0].rsplit("/", 1)[-1]
+            for i in range(len(merge_actions[0].argv) - 1)
+            if merge_actions[0].argv[i] == "--src"
+        ]
+        asserts.equals(env, ctx.attr.expected_source_trees, source_trees)
+    pth_actions = [
+        action
+        for action in analysistest.target_actions(env)
+        if any([
+            output.basename == target.label.name + ".pth"
+            for output in action.outputs.to_list()
+        ])
+    ]
+    asserts.equals(env, 1, len(pth_actions))
+    if len(pth_actions) == 1:
+        asserts.false(env, "_mixed_topology_regular.install" in pth_actions[0].content)
+        asserts.false(env, "_mixed_topology_namespace.install" in pth_actions[0].content)
+    return analysistest.end(env)
+
+_mixed_topology_merge_test = analysistest.make(
+    _mixed_topology_merge_test_impl,
+    attrs = {"expected_source_trees": attr.string_list(mandatory = True)},
+)
+
+def _mixed_topology_missing_tree_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "do not expose install_tree outputs")
+    return analysistest.end(env)
+
+_mixed_topology_missing_tree_test = analysistest.make(
+    _mixed_topology_missing_tree_test_impl,
+    expect_failure = True,
+)
+
 def _unknown_topology_error_test_impl(ctx):
     env = analysistest.begin(ctx)
     asserts.expect_failure(env, "top-level with unknown topology `shared`")
@@ -589,6 +634,93 @@ def merge_outputs_test_suite():
     _unknown_topology_merge_test(
         name = "unknown_topology_merge_test",
         target_under_test = ":_unknown_topology_binary",
+    )
+
+    whl_install(
+        name = "_mixed_topology_regular",
+        collision_value = "regular",
+        directory_top_levels = ["shared"],
+        top_levels = ["shared"],
+        tags = ["manual"],
+    )
+    whl_install(
+        name = "_mixed_topology_namespace",
+        collision_value = "namespace",
+        directory_top_levels = ["shared"],
+        namespace_entries = ["shared/extension.py"],
+        namespace_top_levels = ["shared"],
+        top_levels = ["shared"],
+        tags = ["manual"],
+    )
+    py_library(
+        name = "_mixed_topology_regular_branch",
+        deps = [":_mixed_topology_regular"],
+        tags = ["manual"],
+    )
+    py_library(
+        name = "_mixed_topology_namespace_branch",
+        deps = [":_mixed_topology_namespace"],
+        tags = ["manual"],
+    )
+    py_binary(
+        name = "_mixed_topology_forward_binary",
+        package_collisions = "warning",
+        srcs = ["merge_outputs_test.py"],
+        deps = [
+            ":_mixed_topology_regular_branch",
+            ":_mixed_topology_namespace_branch",
+        ],
+        tags = ["manual"],
+    )
+    _mixed_topology_merge_test(
+        name = "mixed_topology_forward_merge_test",
+        expected_source_trees = [
+            "_mixed_topology_regular.install",
+            "_mixed_topology_namespace.install",
+        ],
+        target_under_test = ":_mixed_topology_forward_binary",
+    )
+    py_binary(
+        name = "_mixed_topology_reverse_binary",
+        package_collisions = "warning",
+        srcs = ["merge_outputs_test.py"],
+        deps = [
+            ":_mixed_topology_namespace_branch",
+            ":_mixed_topology_regular_branch",
+        ],
+        tags = ["manual"],
+    )
+    _mixed_topology_merge_test(
+        name = "mixed_topology_reverse_merge_test",
+        expected_source_trees = [
+            "_mixed_topology_namespace.install",
+            "_mixed_topology_regular.install",
+        ],
+        target_under_test = ":_mixed_topology_reverse_binary",
+    )
+
+    whl_install(
+        name = "_mixed_topology_missing_tree",
+        directory_top_levels = ["shared"],
+        expose_install_tree = False,
+        namespace_entries = ["shared/missing.py"],
+        namespace_top_levels = ["shared"],
+        top_levels = ["shared"],
+        tags = ["manual"],
+    )
+    py_binary(
+        name = "_mixed_topology_missing_tree_binary",
+        package_collisions = "warning",
+        srcs = ["merge_outputs_test.py"],
+        deps = [
+            ":_mixed_topology_regular",
+            ":_mixed_topology_missing_tree",
+        ],
+        tags = ["manual"],
+    )
+    _mixed_topology_missing_tree_test(
+        name = "mixed_topology_missing_tree_test",
+        target_under_test = ":_mixed_topology_missing_tree_binary",
     )
 
     py_library(

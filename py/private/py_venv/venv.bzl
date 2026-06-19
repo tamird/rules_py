@@ -81,19 +81,18 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
       `py_unpacked_wheel`) keep the historical `.pth`-only fallback.
       Otherwise apply `package_collisions` policy.
 
-      Within an all-namespace top-level there's one shape `.pth` +
-      `addsitedir` cannot handle: a REGULAR package spanning wheels.
-      E.g. azure-core owns `azure/core/` (has `__init__.py`) while
+      `.pth` + `addsitedir` cannot reproduce a flat installation when a
+      REGULAR package must be overlaid across wheels. This occurs when one
+      wheel owns the regular top-level and others contribute PEP 420 portions,
+      or within an all-namespace top-level when a regular package spans
+      wheels. E.g. azure-core owns `azure/core/` (has `__init__.py`) while
       azure-core-tracing-opentelemetry installs
-      `azure/core/tracing/ext/opentelemetry_span/` into that same tree.
-      Python locks a regular package's `__path__` to the first
-      directory found, so the second wheel's graft is unreachable. We
-      detect this by cross-referencing each wheel's `regular_roots`
-      against the other claimants' `namespace_dirs` skeletons, then
-      merge the complete top-level namespace from every materialized
-      claimant. This produces one concrete overlay following wheel
-      dependency precedence, remains visible to static tools, and gives
-      Bazel one owned output instead of nested sibling outputs.
+      `azure/core/tracing/ext/opentelemetry_span/` into that same tree. Python
+      locks a regular package's `__path__` to the first directory found, so
+      the other wheels' grafts are unreachable. Merge the complete top-level
+      from every materialized claimant to produce one concrete overlay in
+      wheel dependency order, expose it to static tools, and give Bazel one
+      owned output instead of nested sibling outputs.
 
     * **Console-script name in bin/.** Apply `package_collisions` directly
       — no namespace equivalent.
@@ -111,9 +110,9 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
       merge_groups: list of struct(root, site_packages_list,
           missing_required_site_packages) — top-level directories that need a
           physical merge because their topology is unknown or a regular
-          package spans wheels, with every materialized claimant's
-          site-packages path in last-wins priority order and any required
-          claimant that cannot be materialized.
+          package must be overlaid across wheels, with every materialized
+          claimant's site-packages path in last-wins priority order and any
+          required claimant that cannot be materialized.
     """
 
     def _complain(what, name, a, b):
@@ -182,30 +181,35 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
             top_level_to_site_pkgs[tl] = claimants[0].site_packages
             continue
 
-        if (
-            all([c.is_directory for c in distinct_sp.values()]) and
-            not all([c.topology_known for c in distinct_sp.values()])
-        ):
-            unknown_claimants = distinct_sp.values()
-            winner = unknown_claimants[0]
-            for c in unknown_claimants[1:]:
+        unique_claimants = distinct_sp.values()
+        all_directories = all([c.is_directory for c in unique_claimants])
+        unknown_topology = all_directories and not all([c.topology_known for c in unique_claimants])
+        namespace_claimants = [c for c in unique_claimants if c.is_ns]
+        mixed_topology = (
+            all_directories and
+            namespace_claimants and
+            len(namespace_claimants) != len(unique_claimants)
+        )
+        if unknown_topology or mixed_topology:
+            winner = unique_claimants[0]
+            for c in unique_claimants[1:]:
                 _complain(
-                    "top-level with unknown topology",
+                    "top-level with unknown topology" if unknown_topology else "top-level",
                     tl,
                     winner.site_packages,
                     c.site_packages,
                 )
                 winner = c
 
-            # A sys.path fallback cannot reproduce flat-install precedence:
-            # site.addsitedir appends each wheel root, so the first regular
-            # package would still win. Merge the complete top-level trees in
-            # dependency order instead; site_merge installs later files over
-            # earlier files and therefore preserves the collision contract
-            # without needing to know the package topology.
+            # A sys.path fallback cannot reproduce a flat installation when
+            # topology is unknown or a regular package is combined with
+            # namespace-only contributors: site.addsitedir appends each wheel
+            # root, so the first regular package would still win. Merge the
+            # complete top-level trees in dependency order instead; site_merge
+            # installs later files over earlier files.
             materialized = []
             missing_required = []
-            for c in unknown_claimants:
+            for c in unique_claimants:
                 wheel = wheel_by_sp[c.site_packages]
                 if getattr(wheel, "install_tree", None) != None:
                     materialized.append(c.site_packages)
@@ -220,7 +224,7 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
             )
             continue
 
-        all_namespace = all([c.is_ns for c in claimants])
+        all_namespace = len(namespace_claimants) == len(unique_claimants)
         if all_namespace:
             # Deep-overlap scan first: a regular root of one claimant
             # appearing in another claimant's namespace skeleton (B
@@ -245,8 +249,6 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
                             root in getattr(w_b, "regular_roots", ())):
                             required_site_packages[sp_a] = True
                             required_site_packages[sp_b] = True
-
-            unique_claimants = distinct_sp.values()
 
             # One physical merge owns the complete top-level whenever a
             # regular package spans wheels below it. Include every claimant
