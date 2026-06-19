@@ -248,21 +248,27 @@ def main():
         / "python{}.{}".format(args.python_version_major, args.python_version_minor)
         / "site-packages"
     )
+    # Metadata describes the installed wheel after patching, not derived
+    # bytecode. A root-level __pycache__ is absent when none of the wheel's
+    # root modules compile for the selected interpreter.
+    if args.expected_metadata is not None:
+        _validate_metadata(site_packages, args.expected_metadata)
+
     if args.compile_pyc:
         if not args.python:
             raise SystemExit("--python is required when --compile-pyc is set")
-        r = subprocess.run(
+        # Wheels can contain source for Python versions other than the selected
+        # runtime. Match pip by ignoring compileall's aggregate false result
+        # while retaining its diagnostics and failing on abnormal child exits.
+        # https://github.com/pypa/pip/blob/c8651d86d2d080c1936974873ab162f9c2507666/src/pip/_internal/operations/install/wheel.py#L623-L639
+        subprocess.run(
             [
-                str(args.python), "-m", "compileall", "-q",
+                str(args.python), "-c", "import compileall; compileall.main()", "-q",
                 "--invalidation-mode", args.pyc_invalidation_mode,
                 str(site_packages),
-            ]
+            ],
+            check=True,
         )
-        if r.returncode != 0:
-            raise SystemExit("compileall failed ({}) for {}".format(r.returncode, site_packages))
-
-    if args.expected_metadata is not None:
-        _validate_metadata(site_packages, args.expected_metadata)
 
 
 if __name__ == "__main__":

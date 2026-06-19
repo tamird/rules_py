@@ -468,9 +468,9 @@ def metadata_selection_test_suite(name):
         name = name + "_compile_pyc_test",
         target_under_test = ":__metadata_compile_pyc_fixture",
         expected_console_scripts = [],
-        expected_directory_top_levels = ["__pycache__"],
-        expected_namespace_top_levels = ["__pycache__"],
-        expected_top_levels = ["demo.py", "__pycache__"],
+        expected_directory_top_levels = [],
+        expected_namespace_top_levels = [],
+        expected_top_levels = ["demo.py"],
         leaked_console_scripts = [],
         leaked_top_levels = [],
     )

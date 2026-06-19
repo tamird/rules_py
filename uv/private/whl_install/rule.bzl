@@ -46,12 +46,6 @@ def _whl_install(ctx):
         layout_known = whl_basename in ctx.attr.top_levels
         topology_known = layout_known
         scripts_known = whl_basename in ctx.attr.console_scripts
-    if (layout_known and ctx.attr.compile_pyc and
-        any([name.endswith(".py") for name in top_levels]) and
-        "__pycache__" not in top_levels):
-        top_levels.append("__pycache__")
-        directory_top_levels.append("__pycache__")
-        namespace_top_levels.append("__pycache__")
     unpack_script = ctx.file._unpack_script
     arguments = ctx.actions.args()
     arguments.add(unpack_script)

@@ -1,4 +1,5 @@
 import json
+import shutil
 import stat
 import subprocess
 import sys
@@ -7,24 +8,41 @@ import zipfile
 from pathlib import Path
 
 
+_TOP_LEVELS = {
+    "fixture": "directory",
+    "fixture-1.0.dist-info": "directory",
+    "root_module.py": "file",
+}
+
+
 def _write_member(archive: zipfile.ZipFile, name: str, data: bytes, mode: int) -> None:
     info = zipfile.ZipInfo(name)
     info.external_attr = mode << 16
     archive.writestr(info, data)
 
 
-def _build_wheel(path: Path, *, broken: bool) -> None:
-    body = b"def f(\n" if broken else b"def f():\n    return 1\n"
+def _build_wheel(path: Path, *, legacy_syntax: bool) -> None:
+    body = (
+        b"raise RuntimeError, None, None\n"
+        if legacy_syntax
+        else b"def f():\n    return 1\n"
+    )
     with zipfile.ZipFile(path, "w") as archive:
         _write_member(archive, "fixture/__init__.py", b"VALUE = 1\n", 0o644)
-        _write_member(archive, "fixture/mod.py", body, 0o644)
+        _write_member(archive, "root_module.py", body, 0o644)
         _write_member(archive, "fixture-1.0.dist-info/RECORD", b"", 0o644)
+
 
 def _mode(path: Path) -> int:
     return stat.S_IMODE(path.stat().st_mode)
 
 
-def _run_unpack(unpack: Path, wheel: Path, output: Path) -> subprocess.CompletedProcess:
+def _run_unpack(
+    unpack: Path,
+    wheel: Path,
+    output: Path,
+    python: Path,
+) -> subprocess.CompletedProcess:
     return subprocess.run(
         [
             sys.executable,
@@ -39,7 +57,9 @@ def _run_unpack(unpack: Path, wheel: Path, output: Path) -> subprocess.Completed
             str(sys.version_info.minor),
             "--compile-pyc",
             "--python",
-            sys.executable,
+            str(python),
+            "--expected-metadata",
+            json.dumps({"top_levels": _TOP_LEVELS}),
         ],
         capture_output=True,
         text=True,
@@ -51,9 +71,9 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         good_wheel = root / "fixture-1.0-py3-none-any.whl"
-        _build_wheel(good_wheel, broken=False)
+        _build_wheel(good_wheel, legacy_syntax=False)
         good_out = root / "good"
-        ok = _run_unpack(unpack, good_wheel, good_out)
+        ok = _run_unpack(unpack, good_wheel, good_out, Path(sys.executable))
         assert ok.returncode == 0, ok.stderr
         site_packages = (
             good_out
@@ -63,12 +83,33 @@ def main() -> None:
         )
         assert next((site_packages / "fixture" / "__pycache__").glob("*.pyc"))
 
-        bad_wheel = root / "broken-1.0-py3-none-any.whl"
-        _build_wheel(bad_wheel, broken=True)
-        bad_out = root / "bad"
-        bad = _run_unpack(unpack, bad_wheel, bad_out)
-        assert bad.returncode != 0, "expected non-zero exit on compile failure"
-        assert "compileall failed" in bad.stderr, bad.stderr
+        legacy_wheel = root / "legacy-1.0-py3-none-any.whl"
+        _build_wheel(legacy_wheel, legacy_syntax=True)
+        legacy_out = root / "legacy"
+        legacy = _run_unpack(
+            unpack,
+            legacy_wheel,
+            legacy_out,
+            Path(sys.executable),
+        )
+        assert legacy.returncode == 0, legacy.stderr
+        legacy_site_packages = (
+            legacy_out
+            / "lib"
+            / f"python{sys.version_info.major}.{sys.version_info.minor}"
+            / "site-packages"
+        )
+        assert next(
+            (legacy_site_packages / "fixture" / "__pycache__").glob("__init__*.pyc")
+        )
+        assert not (legacy_site_packages / "__pycache__").exists()
+        assert "SyntaxError" in legacy.stdout + legacy.stderr
+
+        false = shutil.which("false")
+        assert false is not None
+        failed = _run_unpack(unpack, good_wheel, root / "failed", Path(false))
+        assert failed.returncode != 0, "expected child interpreter failure"
+        assert "CalledProcessError" in failed.stderr
 
         wheel = root / "fixture-1.0-py3-none-any.whl"
         with zipfile.ZipFile(wheel, "w") as archive:
@@ -96,16 +137,9 @@ def main() -> None:
 
         metadata = {
             "console_scripts": ["fixture-cli=fixture:commands.main"],
-            "top_levels": {
-                "fixture": "directory",
-                "fixture-1.0.dist-info": "directory",
-                "root_module.py": "file",
-            },
+            "top_levels": _TOP_LEVELS,
         }
         expected_metadata = json.dumps(metadata, sort_keys=True)
-        compiled_metadata = json.loads(expected_metadata)
-        compiled_metadata["top_levels"]["__pycache__"] = "directory"
-        compiled_metadata = json.dumps(compiled_metadata, sort_keys=True)
 
         for inherited_umask in (0o077, 0o000):
             output = root / f"install-{inherited_umask:o}"
@@ -132,7 +166,7 @@ def main() -> None:
                     "--python-version-minor",
                     str(sys.version_info.minor),
                     "--expected-metadata",
-                    compiled_metadata,
+                    expected_metadata,
                     "--compile-pyc",
                     "--python",
                     sys.executable,
