@@ -14,7 +14,13 @@ for unique in ("first", "second"):
 fallback_values = []
 for entry in sys.path:
     root = Path(entry)
-    if "_wheels" not in root.parts:
+    # The fallback (collision-loser) wheel stays importable via its OWN
+    # install-tree site-packages appended to sys.path, distinct from the
+    # venv's merged site-packages (which carries the winner). Before the
+    # `_wheels/<key>` indirection was dropped this entry was a `_wheels`
+    # path; now it is the wheel's natural runfiles path, whose install-tree
+    # directory ends in `.install`.
+    if not any(part.endswith(".install") for part in root.parts):
         continue
     for unique in ("first", "second"):
         if (root / "collision_namespace" / f"{unique}.py").is_file():
