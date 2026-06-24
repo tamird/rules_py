@@ -177,7 +177,12 @@ uv.override_package(
 - Each `(lock, name, version)` triple may only have one `override_package` declaration. Duplicates are an error.
 - `target` is mutually exclusive with all other modification attributes. Use `target` for full replacement OR the patch/modification attributes, not both.
 - The `version` attribute is optional and defaults to whatever version the lockfile resolves.
-- Pre-build patches only apply to packages that have a source distribution in the lockfile. If a package only has pre-built wheels, `pre_build_patches` has no effect.
+- `pre_build_patches`, `toolchains`, `env`, and non-default `resource_set`
+  values require a source distribution. An override that applies them to a
+  wheel-only lock record is rejected.
+- A configure tool that returns complete `build_file_content` owns its PEP 517
+  rule. Build-only override attributes are rejected unless the configure tool
+  incorporates them into that content.
 
 ## Future work
 
