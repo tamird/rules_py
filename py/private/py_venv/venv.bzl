@@ -383,6 +383,8 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
     # namespace) symlinks.
     fully_covered = {}
     for w in wheels:
+        if not w.top_levels:
+            continue
         skipped = skipped_per_wheel.get(w.site_packages_rfpath, {})
         ns_covered = ns_covered_per_wheel.get(w.site_packages_rfpath, {})
         covered = True
@@ -514,6 +516,11 @@ def assemble_venv(
     # each wheel by its runfiles path directly, not through this map.
     wheels_with_trees = [w for w in wheels if getattr(w, "install_tree", None) != None]
     tree_by_sp = {w.site_packages_rfpath: w.install_tree for w in wheels_with_trees}
+    known_layout_site_pkgs = {
+        w.site_packages_rfpath: True
+        for w in wheels
+        if w.top_levels
+    }
 
     declared = []  # accumulator for all outputs
 
@@ -604,18 +611,18 @@ def assemble_venv(
         )
         declared.append(merged_dir)
 
-    # A wheel-root `.pth` shim only fires when its file sits in the venv's
-    # own site-packages. install_tree wheels already have their root `.pth`
-    # files projected there by the per-top-level symlink loop above, so they
-    # emit a plain escape-form path line; `site.addsitedir` would re-scan the
-    # wheel root and run the shim a second time. Wheels without an
-    # install_tree have no such projection, so they fall back to
-    # `site.addsitedir` (sys.prefix-relative to survive RBE sandbox layouts)
-    # to run their root `.pth` shims at all.
+    # Wheels may emit PyWheelsInfo for console scripts while leaving
+    # `top_levels` empty, so their immediate layout is unknown and no root
+    # entries were projected. Those wheels need `site.addsitedir` to process
+    # root `.pth` files.
+    # Known layouts use a plain path because their root `.pth` files were
+    # already projected or deliberately suppressed by collision resolution.
     def _format_imp(imp):
         if imp in fully_covered_site_pkgs:
             return None
-        if imp.endswith("site-packages") and imp not in tree_by_sp:
+        if imp.endswith("site-packages"):
+            if imp in known_layout_site_pkgs:
+                return "{}/{}".format(escape, imp)
             return ("import os, sys, site; " +
                     "site.addsitedir(os.path.normpath(os.path.join(" +
                     "sys.prefix, \"{venv_escape}\", \"{imp}\")))").format(
@@ -629,8 +636,8 @@ def assemble_venv(
     pth_lines.set_param_file_format("multiline")
     pth_lines.add(escape)
 
-    # allow_closure lets _format_imp capture fully_covered_site_pkgs / tree_by_sp
-    # so we don't have to materialise imports_depset via .to_list().
+    # allow_closure lets _format_imp capture the wheel metadata maps so we
+    # don't have to materialise imports_depset via .to_list().
     pth_lines.add_all(imports_depset, map_each = _format_imp, allow_closure = True)
 
     site_packages_pth_file = ctx.actions.declare_file(
