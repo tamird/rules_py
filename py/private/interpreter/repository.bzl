@@ -1,7 +1,4 @@
-"""Repository rules for Python interpreter toolchains.
-
-Includes rules for downloading PBS interpreters and registering local interpreters.
-"""
+"""Repository rules for Python interpreter toolchains."""
 
 load("@bazel_features//:features.bzl", features = "bazel_features")
 load(":exclude_feature.bzl", "INTERPRETER_FEATURES")
@@ -227,11 +224,9 @@ def _python_toolchains_impl(rctx):
             setting_names.append(name)
 
         # Track version/freethreaded for hub-local config_settings
-        python_version = info.get("python_version", "")
-        if python_version:
-            seen_versions[python_version] = True
-        freethreaded = info.get("freethreaded", False)
-        seen_freethreaded[freethreaded] = True
+        python_version = info["python_version"]
+        seen_versions[python_version] = True
+        seen_freethreaded[info.get("freethreaded", False)] = True
 
         toolchain_infos.append((info, setting_names))
 
@@ -279,16 +274,8 @@ config_setting(
         extra_target_compatible = info.get("target_compatible_with", [])
         extra_exec_compatible = info.get("exec_compatible_with", [])
 
-        # Use hub-local config_settings for version/freethreaded when available,
-        # fall back to repo-local settings for local interpreters without version info.
-        python_version = info.get("python_version", "")
-        if python_version:
-            version_setting = ":" + _version_setting_name(python_version)
-            freethreaded_setting = ":" + _freethreaded_setting_name(info.get("freethreaded", False))
-        else:
-            # Local interpreters without known version — must reference repo-local settings
-            version_setting = "@{repo}//:is_matching_python_version".format(repo = info["repo"])
-            freethreaded_setting = "@{repo}//:is_matching_freethreaded".format(repo = info["repo"])
+        version_setting = ":" + _version_setting_name(info["python_version"])
+        freethreaded_setting = ":" + _freethreaded_setting_name(info.get("freethreaded", False))
 
         target_settings = [
             version_setting,
@@ -353,164 +340,4 @@ python_toolchains = repository_rule(
     attrs = {
         "toolchains": attr.string_list(),
     },
-)
-
-def _local_python_interpreter_impl(rctx):
-    """Probes and registers a local (non-PBS) Python interpreter."""
-
-    # Resolve the interpreter binary path
-    interpreter_path = rctx.attr.interpreter_path
-    env_var = rctx.attr.env
-
-    if not interpreter_path and not env_var:
-        fail("Either interpreter_path or env must be set")
-    if interpreter_path and env_var:
-        fail("Only one of interpreter_path or env may be set")
-
-    if env_var:
-        env_value = rctx.os.environ.get(env_var, "")
-        if not env_value:
-            _write_inactive_build(rctx, "Environment variable {} is not set".format(env_var))
-            return
-
-        # Resolve the python3 binary within the environment prefix
-        is_windows = "win" in rctx.os.name.lower()
-        if is_windows:
-            interpreter_path = env_value + "/Scripts/python.exe"
-        else:
-            interpreter_path = env_value + "/bin/python3"
-
-    # Check the interpreter exists
-    path = rctx.path(interpreter_path)
-    if not path.exists:
-        _write_inactive_build(rctx, "Interpreter not found at {}".format(interpreter_path))
-        return
-
-    # Probe the interpreter for version info
-    probe_script = rctx.attr._probe_script
-    result = rctx.execute(
-        [interpreter_path, rctx.path(probe_script)],
-        timeout = 10,
-    )
-    if result.return_code != 0:
-        _write_inactive_build(
-            rctx,
-            "Probe failed (exit {}): {}".format(result.return_code, result.stderr),
-        )
-        return
-
-    probe = json.decode(result.stdout)
-    major = str(probe["major"])
-    minor = str(probe["minor"])
-    micro = str(probe["micro"])
-
-    # Allow explicit version override
-    python_version = rctx.attr.python_version
-    if python_version:
-        parts = python_version.split(".")
-        major = parts[0]
-        minor = parts[1]
-        micro = parts[2] if len(parts) > 2 else micro
-
-    major_minor = "{}.{}".format(major, minor)
-
-    rctx.file("BUILD.bazel", content = """\
-load("@rules_python//python:py_runtime.bzl", "py_runtime")
-load("@rules_python//python:py_runtime_pair.bzl", "py_runtime_pair")
-
-package(default_visibility = ["//visibility:public"])
-
-config_setting(
-    name = "is_matching_python_version",
-    flag_values = {{
-        "{rpy_major_minor_flag}": "{major_minor}",
-    }},
-)
-
-config_setting(
-    name = "is_matching_freethreaded",
-    flag_values = {{
-        "{freethreaded_flag}": "false",
-    }},
-)
-
-py_runtime(
-    name = "py3_runtime",
-    interpreter_path = "{interpreter_path}",
-    interpreter_version_info = {{
-        "major": "{major}",
-        "minor": "{minor}",
-        "micro": "{micro}",
-    }},
-    python_version = "PY3",
-)
-
-py_runtime_pair(
-    name = "runtime_pair",
-    py2_runtime = None,
-    py3_runtime = ":py3_runtime",
-)
-""".format(
-        rpy_major_minor_flag = _RPY_VERSION_MAJOR_MINOR_FLAG,
-        freethreaded_flag = _FREETHREADING_FLAG,
-        major_minor = major_minor,
-        interpreter_path = interpreter_path,
-        major = major,
-        minor = minor,
-        micro = micro,
-    ))
-
-def _write_inactive_build(rctx, reason):
-    """Write a BUILD file for an inactive/unavailable local interpreter."""
-    rctx.file("BUILD.bazel", content = """\
-package(default_visibility = ["//visibility:public"])
-
-# Inactive local interpreter: {reason}
-
-config_setting(
-    name = "is_matching_python_version",
-    flag_values = {{
-        "{rpy_major_minor_flag}": "INACTIVE_LOCAL_INTERPRETER",
-    }},
-)
-
-config_setting(
-    name = "is_matching_freethreaded",
-    flag_values = {{
-        "{freethreaded_flag}": "false",
-    }},
-)
-
-filegroup(
-    name = "runtime_pair",
-    srcs = [],
-)
-""".format(
-        reason = reason,
-        rpy_major_minor_flag = _RPY_VERSION_MAJOR_MINOR_FLAG,
-        freethreaded_flag = _FREETHREADING_FLAG,
-    ))
-
-local_python_interpreter = repository_rule(
-    implementation = _local_python_interpreter_impl,
-    attrs = {
-        "env": attr.string(
-            default = "",
-            doc = "Environment variable pointing to a Python prefix (e.g. VIRTUAL_ENV).",
-        ),
-        "interpreter_path": attr.string(
-            default = "",
-            doc = "Absolute path to a Python interpreter binary.",
-        ),
-        "python_version": attr.string(
-            default = "",
-            doc = "Override the detected Python version (major.minor or major.minor.micro).",
-        ),
-        "_probe_script": attr.label(
-            allow_single_file = True,
-            default = Label(":probe_interpreter.py"),
-        ),
-    },
-    environ = ["VIRTUAL_ENV"],
-    doc = "Register a local (non-downloaded) Python interpreter as a toolchain.",
 )
