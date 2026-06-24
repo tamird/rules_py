@@ -35,9 +35,11 @@ def _python_interpreter_impl(rctx):
         rctx.delete("share/terminfo")
 
     rctx.file("BUILD.bazel", content = _build_file_content(
+        freethreaded = rctx.attr.freethreaded,
         major = major,
         minor = minor,
         micro = micro,
+        platform = platform,
         python_bin = python_bin,
         is_windows = is_windows,
     ))
@@ -81,7 +83,7 @@ filegroup(
 
     return "\n".join(lines), all_excludes
 
-def _build_file_content(major, minor, micro, python_bin, is_windows):
+def _build_file_content(major, minor, micro, python_bin, platform, freethreaded, is_windows):
     """Generate the full BUILD.bazel content for an interpreter repo."""
 
     feature_targets, feature_excludes = _feature_filegroups(major, minor, is_windows)
@@ -112,10 +114,99 @@ def _build_file_content(major, minor, micro, python_bin, is_windows):
     }})
 """.format(feature = feature_name)
 
+    abi_suffix = "t" if freethreaded else ""
+    include_dirs = ["include"]
+    if not is_windows:
+        include_dirs.append("include/python{}.{}{}".format(major, minor, abi_suffix))
+        if not freethreaded:
+            include_dirs.append("include/python{}.{}m".format(major, minor))
+
+    interface_targets = ""
+    header_interface_deps = []
+    abi3_interface_deps = []
+    if is_windows:
+        # Full-ABI extensions link the versioned import library. Stable-ABI
+        # extensions instead link python3.lib:
+        # https://docs.python.org/3/c-api/stable.html#stable-application-binary-interface
+        interface_targets = """\
+cc_import(
+    name = "interface",
+    interface_library = "libs/python{major}{minor}{abi_suffix}.lib",
+    shared_library = "python{major}{minor}{abi_suffix}.dll",
+)
+""".format(
+            abi_suffix = abi_suffix,
+            major = major,
+            minor = minor,
+        )
+        libpython_target = """\
+alias(
+    name = "libpython",
+    actual = ":interface",
+)
+"""
+        header_interface_deps = [":interface"]
+        if not freethreaded:
+            interface_targets += """
+cc_import(
+    name = "abi3_interface",
+    interface_library = "libs/python3.lib",
+    shared_library = "python3.dll",
+)
+"""
+            abi3_interface_deps = [":abi3_interface"]
+    elif "darwin" in platform:
+        libpython_srcs = [
+            "lib/libpython{}.{}{}.dylib".format(major, minor, abi_suffix),
+        ]
+    else:
+        libpython_srcs = [
+            "lib/libpython{}.{}{}.so".format(major, minor, abi_suffix),
+            "lib/libpython{}.{}{}.so.1.0".format(major, minor, abi_suffix),
+        ]
+    if not is_windows:
+        libpython_target = """\
+cc_library(
+    name = "libpython",
+    hdrs = [":includes"],
+    srcs = {libpython_srcs},
+)
+""".format(libpython_srcs = repr(libpython_srcs))
+
+    abi3_header_target = ""
+    headers_abi3_attr = ""
+    python_headers_attrs = """\
+    hdrs = [":includes"],
+    includes = {include_dirs},
+    deps = {header_interface_deps},
+""".format(
+        header_interface_deps = repr(header_interface_deps),
+        include_dirs = repr(include_dirs),
+    )
+
+    # CPython rejects Py_LIMITED_API in free-threaded builds:
+    # https://github.com/python/cpython/blob/v3.13.12/Include/Python.h#L49-L53
+    if not freethreaded:
+        abi3_header_target = """\
+cc_library(
+    name = "python_headers_abi3",
+    hdrs = [":includes"],
+    includes = {include_dirs},
+    deps = {abi3_interface_deps},
+)
+""".format(
+            abi3_interface_deps = repr(abi3_interface_deps),
+            include_dirs = repr(include_dirs),
+        )
+        headers_abi3_attr = "    headers_abi3 = \":python_headers_abi3\",\n"
+
     return """\
+load("@rules_cc//cc:cc_import.bzl", "cc_import")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_python//python:py_runtime.bzl", "py_runtime")
 load("@rules_python//python:py_runtime_pair.bzl", "py_runtime_pair")
 load("@rules_python//python:py_exec_tools_toolchain.bzl", "py_exec_tools_toolchain")
+load("@rules_python//python/cc:py_cc_toolchain.bzl", "py_cc_toolchain")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -139,6 +230,21 @@ filegroup(
 {feature_selects}    ,
 )
 
+# --- Python C toolchain ---
+
+{interface_targets}
+filegroup(
+    name = "includes",
+    srcs = glob(["include/**/*.h"], allow_empty = False),
+)
+
+{abi3_header_target}
+cc_library(
+    name = "python_headers",
+{python_headers_attrs})
+
+{libpython_target}
+
 py_runtime(
     name = "py3_runtime",
     files = [":files"],
@@ -157,6 +263,13 @@ py_runtime_pair(
     py3_runtime = ":py3_runtime",
 )
 
+py_cc_toolchain(
+    name = "py_cc_toolchain",
+    headers = ":python_headers",
+{headers_abi3_attr}    libs = ":libpython",
+    python_version = "{major}.{minor}",
+)
+
 py_exec_tools_toolchain(
     name = "exec_tools_toolchain",
 )
@@ -169,6 +282,11 @@ py_exec_tools_toolchain(
         feature_selects = feature_selects,
         core_include = core_include,
         core_exclude = core_exclude,
+        interface_targets = interface_targets,
+        abi3_header_target = abi3_header_target,
+        python_headers_attrs = python_headers_attrs,
+        headers_abi3_attr = headers_abi3_attr,
+        libpython_target = libpython_target,
     )
 
 python_interpreter = repository_rule(
@@ -315,6 +433,14 @@ toolchain(
     target_settings = {target_settings},
     toolchain = "@{repo}//:runtime_pair",
     toolchain_type = "@bazel_tools//tools/python:toolchain_type",
+)
+
+toolchain(
+    name = "{name}_py_cc",
+    target_compatible_with = {target_compatible_with},
+    target_settings = {target_settings},
+    toolchain = "@{repo}//:py_cc_toolchain",
+    toolchain_type = "@rules_python//python/cc:toolchain_type",
 )
 
 # Exec tools toolchain: selected by exec platform (not target platform) so

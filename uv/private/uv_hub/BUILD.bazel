@@ -63,8 +63,8 @@ write_source_files(
         # snapshot (~1200 lines) — the resolver's flattened output shape.
         "snapshots/pip_configurations.BUILD.bazel": "@aspect_rules_py_pip_configurations//:BUILD.bazel",
         # python_toolchains: interpreter toolchain hub. Pins the public
-        # toolchain registration surface (toolchain + exec_tools toolchain
-        # rules per PBS release × Python version × platform).
+        # runtime, C, and exec-tools registration surface per PBS release,
+        # Python version, and platform.
         "snapshots/python_interpreters.BUILD.bazel": "@python_interpreters//:BUILD.bazel",
         # whl_install: per-wheel install BUILD. attrs is a stable
         # pure-Python wheel — pins the select_chain + gazelle_index_whl

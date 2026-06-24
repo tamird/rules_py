@@ -25,6 +25,8 @@ platform(
 
 interpreter_toolchain_check(
     name = "resolved_311",
+    expect_abi3 = True,
+    expected_cc_toolchain = "@python_3_11_x86_64_unknown_linux_gnu//:py_cc_toolchain",
     expected_interpreter = "@python_3_11_x86_64_unknown_linux_gnu//:bin/python3",
     python_version = "3.11",
     tags = ["manual"],
@@ -32,7 +34,18 @@ interpreter_toolchain_check(
 
 interpreter_toolchain_check(
     name = "resolved_312",
+    expect_abi3 = True,
+    expected_cc_toolchain = "@python_3_12_x86_64_unknown_linux_gnu//:py_cc_toolchain",
     expected_interpreter = "@python_3_12_x86_64_unknown_linux_gnu//:bin/python3",
     python_version = "3.12",
+    tags = ["manual"],
+)
+
+interpreter_toolchain_check(
+    name = "resolved_313_freethreaded",
+    expect_abi3 = False,
+    expected_cc_toolchain = "@python_3_13_x86_64_unknown_linux_gnu_freethreaded//:py_cc_toolchain",
+    expected_interpreter = "@python_3_13_x86_64_unknown_linux_gnu_freethreaded//:bin/python3",
+    python_version = "3.13",
     tags = ["manual"],
 )

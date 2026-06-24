@@ -20,6 +20,7 @@ check_toolchain() {
         --lockfile_mode=off \
         "--@aspect_rules_py//py:python_version=${version}" \
         --@aspect_rules_py//uv/private/constraints/platform:platform_libc=glibc \
+        --@rules_python//python/private:visible_for_testing=true \
         "--define=interpreter_setting=${setting}" \
         --platforms=//:linux_x86_64 \
         "$@" \
@@ -30,6 +31,16 @@ check_toolchain() {
 check_toolchain 3.11 311 --define=interpreter_setting_secondary=311
 check_toolchain 3.12 312
 
+"$BAZEL" build \
+    --lockfile_mode=off \
+    --@aspect_rules_py//py:python_version=3.13 \
+    --@aspect_rules_py//py/private/interpreter:freethreaded=true \
+    --@aspect_rules_py//uv/private/constraints/platform:platform_libc=glibc \
+    --@rules_python//python/private:visible_for_testing=true \
+    --platforms=//:linux_x86_64 \
+    -- //:resolved_313_freethreaded \
+    || fail "Python 3.13 free-threaded C toolchain failed analysis"
+
 failure_log="$(mktemp)"
 trap 'rm -f "$failure_log"' EXIT
 
@@ -37,10 +48,15 @@ if "$BAZEL" build \
     --lockfile_mode=off \
     --@aspect_rules_py//py:python_version=3.11 \
     --@aspect_rules_py//uv/private/constraints/platform:platform_libc=glibc \
+    --@rules_python//python/private:visible_for_testing=true \
     --define=interpreter_setting=312 \
     --platforms=//:linux_x86_64 \
     -- //:resolved_311 >"$failure_log" 2>&1; then
     fail "Python 3.11 resolved with Python 3.12 root config_settings"
+fi
+if ! grep -Fq "expected Python 3.11 PBS interpreter" "$failure_log"; then
+    cat "$failure_log" >&2
+    fail "Python 3.11 mismatch failed for an unrelated reason"
 fi
 
 if (cd conflict && "$BAZEL" query \
