@@ -170,15 +170,18 @@ PLATFORMS = {
 # - extension: the archive file extension
 # - strip_prefix: the prefix to strip when extracting
 # - freethreaded: whether this is a free-threaded build
+# - abi_flags: CPython ABI flags used in header and library paths
 #
 # buildifier: disable=unsorted-dict-items
 RUNTIME_MODES = {
     "install_only": {
+        "abi_flags": "",
         "extension": "tar.gz",
         "strip_prefix": "python",
         "freethreaded": False,
     },
     "freethreaded": {
+        "abi_flags": "t",
         "extension": "tar.zst",
         "strip_prefix": "python/install",
         "freethreaded": True,

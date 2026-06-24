@@ -338,12 +338,12 @@ def _python_interpreters_impl(module_ctx):
                 )
                 python_interpreter(
                     name = repo_name,
+                    abi_flags = mode_info["abi_flags"],
                     python_version = asset_info["full_version"],
                     platform = platform_triple,
                     url = url,
                     sha256 = asset_info["sha256"],
                     strip_prefix = mode_info["strip_prefix"],
-                    freethreaded = mode_info["freethreaded"],
                 )
 
                 toolchain_entries.append(json.encode({
@@ -464,7 +464,8 @@ Only honored from the root module.
             default = [],
             doc = """\
 Additional exec platform constraints appended to each platform variant's
-exec_compatible_with list.
+exec-tools registration. Target runtime and C toolchains do not run on the
+execution platform.
 
 Only honored from the root module.
 """,
