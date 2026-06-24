@@ -24,6 +24,9 @@ edges do not create another precedence position. Fields:
   * `layout_complete`: bool — whether the layout fields completely describe
     the installed tree. False retains observed topology for collision planning
     while requiring whole-wheel fallback for imports.
+  * `directory_top_levels`: tuple[str] — complete subset of top_levels installed
+    as directories when nonempty; an empty or absent tuple means entry types are
+    unknown.
   * `namespace_top_levels`: tuple[str] — subset of top_levels that are PEP 420 namespace packages.
   * `namespace_entries`: tuple[str] — `/`-joined paths of the concrete entries beneath
     the namespace top-levels (e.g. `jaraco/functools`), used to materialise a merged
@@ -33,10 +36,10 @@ edges do not create another precedence position. Fields:
     namespace top-levels (site-packages-relative `/`-joined paths). May be absent
     on structs from older producers; consumers use `getattr` with a `()` default.
   * `regular_roots`: tuple[str] — minimal directories under the namespace
-    top-levels carrying an `__init__.py`. Cross-referencing a wheel's
-    `regular_roots` with another wheel's `namespace_dirs` detects regular
-    packages spanning wheels, which venv assembly must physically merge.
-    May be absent on structs from older producers.
+    top-levels carrying a direct `__init__.py`. Cross-referencing a
+    wheel's `regular_roots` with another wheel's `namespace_dirs` detects
+    regular packages spanning wheels, which venv assembly must physically
+    merge. May be absent on structs from older producers.
   * `site_packages_rfpath`: str — runfiles-root-relative path to the wheel's site-packages.
   * `console_scripts`: tuple[str] — entry points encoded as `"name=module:func"`.
   * `install_tree`: File — complete installed wheel tree.
