@@ -1,6 +1,6 @@
 """Python-build-standalone release metadata.
 
-This file contains platform mappings and build config definitions for CPython
+This file contains platform mappings and runtime mode definitions for CPython
 interpreters built by the python-build-standalone project
 (https://github.com/astral-sh/python-build-standalone).
 
@@ -35,19 +35,32 @@ DEFAULT_RELEASE_DATES = [
 # config the host's interpreter is being resolved under.
 
 # Mapping from PBS platform triple to Bazel platform constraints.
+# Optimized free-threaded archives use different suffixes on macOS/GNU Linux,
+# musl Linux, and Windows. These exact mappings are visible in PBS manifests:
+# https://github.com/astral-sh/python-build-standalone/releases/download/20260303/SHA256SUMS
+# https://github.com/astral-sh/python-build-standalone/releases/download/20251031/SHA256SUMS
 #
+# - asset_suffixes: exact PBS filename suffix for each logical runtime mode
 # - compatible_with: constraint_values for exec_compatible_with / target_compatible_with
 # - target_settings: additional config_settings the toolchain must match (optional)
 #
 # buildifier: disable=unsorted-dict-items
 PLATFORMS = {
     "aarch64-apple-darwin": {
+        "asset_suffixes": {
+            "install_only": "install_only",
+            "freethreaded": "freethreaded+pgo+lto-full",
+        },
         "compatible_with": [
             "@platforms//os:macos",
             "@platforms//cpu:aarch64",
         ],
     },
     "aarch64-unknown-linux-gnu": {
+        "asset_suffixes": {
+            "install_only": "install_only",
+            "freethreaded": "freethreaded+pgo+lto-full",
+        },
         "compatible_with": [
             "@platforms//os:linux",
             "@platforms//cpu:aarch64",
@@ -57,6 +70,10 @@ PLATFORMS = {
         },
     },
     "aarch64-unknown-linux-musl": {
+        "asset_suffixes": {
+            "install_only": "install_only",
+            "freethreaded": "freethreaded+lto-full",
+        },
         "compatible_with": [
             "@platforms//os:linux",
             "@platforms//cpu:aarch64",
@@ -66,12 +83,20 @@ PLATFORMS = {
         },
     },
     "x86_64-apple-darwin": {
+        "asset_suffixes": {
+            "install_only": "install_only",
+            "freethreaded": "freethreaded+pgo+lto-full",
+        },
         "compatible_with": [
             "@platforms//os:macos",
             "@platforms//cpu:x86_64",
         ],
     },
     "x86_64-unknown-linux-gnu": {
+        "asset_suffixes": {
+            "install_only": "install_only",
+            "freethreaded": "freethreaded+pgo+lto-full",
+        },
         "compatible_with": [
             "@platforms//os:linux",
             "@platforms//cpu:x86_64",
@@ -81,6 +106,10 @@ PLATFORMS = {
         },
     },
     "x86_64-unknown-linux-musl": {
+        "asset_suffixes": {
+            "install_only": "install_only",
+            "freethreaded": "freethreaded+lto-full",
+        },
         "compatible_with": [
             "@platforms//os:linux",
             "@platforms//cpu:x86_64",
@@ -90,18 +119,30 @@ PLATFORMS = {
         },
     },
     "x86_64-pc-windows-msvc": {
+        "asset_suffixes": {
+            "install_only": "install_only",
+            "freethreaded": "freethreaded+pgo-full",
+        },
         "compatible_with": [
             "@platforms//os:windows",
             "@platforms//cpu:x86_64",
         ],
     },
     "aarch64-pc-windows-msvc": {
+        "asset_suffixes": {
+            "install_only": "install_only",
+            "freethreaded": "freethreaded+pgo-full",
+        },
         "compatible_with": [
             "@platforms//os:windows",
             "@platforms//cpu:aarch64",
         ],
     },
     "i686-pc-windows-msvc": {
+        "asset_suffixes": {
+            "install_only": "install_only",
+            "freethreaded": "freethreaded+pgo-full",
+        },
         "compatible_with": [
             "@platforms//os:windows",
             "@platforms//cpu:x86_32",
@@ -109,34 +150,19 @@ PLATFORMS = {
     },
 }
 
-# Build configurations available from PBS. Each config specifies:
-# - suffix: the build config suffix in the asset filename
+# Logical runtime modes registered by this extension. Each mode specifies:
 # - extension: the archive file extension
 # - strip_prefix: the prefix to strip when extracting
 # - freethreaded: whether this is a free-threaded build
 #
 # buildifier: disable=unsorted-dict-items
-BUILD_CONFIGS = {
+RUNTIME_MODES = {
     "install_only": {
-        "suffix": "install_only",
         "extension": "tar.gz",
         "strip_prefix": "python",
         "freethreaded": False,
     },
-    "install_only_stripped": {
-        "suffix": "install_only_stripped",
-        "extension": "tar.gz",
-        "strip_prefix": "python",
-        "freethreaded": False,
-    },
-    "freethreaded+pgo+lto": {
-        "suffix": "freethreaded+pgo+lto-full",
-        "extension": "tar.zst",
-        "strip_prefix": "python/install",
-        "freethreaded": True,
-    },
-    "freethreaded+debug": {
-        "suffix": "freethreaded+debug-full",
+    "freethreaded": {
         "extension": "tar.zst",
         "strip_prefix": "python/install",
         "freethreaded": True,
