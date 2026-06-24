@@ -45,6 +45,10 @@ Where `patches/nvidia-strip-init.patch` might look like:
 +# Stripped by aspect_rules_py override
 ```
 
+The file remains in place, so `nvidia` stays a regular package. Post-install
+patches may not remove package roots or change regular packages into namespace
+packages; use full replacement when the installed topology itself must change.
+
 ### Applying the same patch to multiple packages
 
 Use a Starlark list comprehension:
@@ -225,14 +229,25 @@ uv.override_package(
 - Each `(lock, name, version)` triple may only have one `override_package` declaration. Duplicates are an error.
 - `target` is mutually exclusive with all other modification attributes. Use `target` for full replacement OR the patch/modification attributes, not both.
 - The `version` attribute is optional and defaults to whatever version the lockfile resolves.
-- `pre_build_patches`, `build_tool_env`, `build_tools`, `env`, `path_env`, and
-  non-default `resource_set` values require a source distribution. An override
-  that applies them to a wheel-only lock record is rejected.
+- `pre_build_patches`, `build_tool_env`, `build_tools`, `env`,
+  `monitor_memory`, `path_env`, and non-default `resource_set` values
+  require a source distribution. An override that applies them to a wheel-only
+  lock record is rejected.
 - A configure tool that returns complete `build_file_content` receives
   `pre_build_patches` and `pre_build_patch_strip` in its context and owns
-  applying them. `build_tool_env`, `build_tools`, `env`, `path_env`, and
-  non-default `resource_set` values are rejected because the configure context
-  cannot convey them.
+  applying them. `build_tool_env`, `build_tools`, `env`, `monitor_memory`,
+  `path_env`, and non-default `resource_set` values are rejected because the
+  configure context cannot convey them.
+- Post-install patches may add paths, but they must preserve every original
+  path used for collision and regular-package merge planning, including its
+  file-or-directory kind and regular-versus-namespace classification. Patched
+  wheels retain whole-wheel import fallback while that original topology
+  participates in analysis. Added paths are not visible during analysis; do
+  not add paths that collide with another wheel.
+- Console-script declarations are extracted before post-install patches run.
+  Do not use post-install patches to modify `[console_scripts]` in
+  `.dist-info/entry_points.txt`; generated wrappers continue to reflect the
+  original wheel metadata.
 
 ## Future work
 

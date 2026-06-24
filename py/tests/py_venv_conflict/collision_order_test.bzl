@@ -48,6 +48,7 @@ printf 'VALUE = %s\n' "$4" > "$site/collision_order.py"
     ] + ["lib/python{}.{}/site-packages".format(major, minor)])
     wheel = struct(
         top_levels = top_levels,
+        layout_complete = ctx.attr.layout_complete,
         namespace_top_levels = ("collision_namespace",),
         namespace_entries = (
             "collision_namespace/shared.py",
@@ -77,6 +78,7 @@ printf 'VALUE = %s\n' "$4" > "$site/collision_order.py"
 _wheel = rule(
     implementation = _wheel_impl,
     attrs = {
+        "layout_complete": attr.bool(default = True),
         "ordinary": attr.bool(),
         "value": attr.string(mandatory = True),
     },
@@ -147,6 +149,29 @@ def collision_order_test_suite():
     _collision_error_test(
         name = "collision_error_test",
         target_under_test = ":_collision_error_binary",
+    )
+
+    _wheel(
+        name = "_collision_incomplete",
+        layout_complete = False,
+        ordinary = True,
+        tags = ["manual"],
+        value = "incomplete",
+    )
+    py_binary(
+        name = "_incomplete_collision_error_binary",
+        srcs = ["test_collision_order.py"],
+        main = "test_collision_order.py",
+        package_collisions = "error",
+        tags = ["manual"],
+        deps = [
+            ":_collision_first",
+            ":_collision_incomplete",
+        ],
+    )
+    _collision_error_test(
+        name = "incomplete_collision_error_test",
+        target_under_test = ":_incomplete_collision_error_binary",
     )
 
     _wheel(

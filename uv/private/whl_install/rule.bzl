@@ -18,6 +18,17 @@ def _whl_install(ctx):
 
     archive = ctx.file.src
     unpack_script = ctx.file._unpack_script
+
+    # Per-configuration metadata selection: `src` resolves (through the repo
+    # rule's select_chain) to exactly one wheel for the active configuration.
+    whl_basename = archive.basename
+    top_levels = ctx.attr.top_levels.get(whl_basename, [])
+    namespace_top_levels = ctx.attr.namespace_top_levels.get(whl_basename, [])
+    namespace_entries = ctx.attr.namespace_entries.get(whl_basename, [])
+    namespace_dirs = ctx.attr.namespace_dirs.get(whl_basename, [])
+    regular_roots = ctx.attr.regular_roots.get(whl_basename, [])
+    console_scripts = ctx.attr.console_scripts.get(whl_basename, [])
+
     arguments = ctx.actions.args()
     arguments.add(unpack_script)
     arguments.add_all([install_dir], expand_directories = False, before_each = "--into")
@@ -35,6 +46,13 @@ def _whl_install(ctx):
     if patch_files:
         arguments.add("--patch-strip", str(ctx.attr.patch_strip))
         arguments.add_all(patch_files, before_each = "--patch")
+        arguments.add_all(
+            sorted({
+                path: None
+                for path in top_levels + namespace_entries + namespace_dirs + regular_roots
+            }),
+            before_each = "--preserve-path",
+        )
         transitive_inputs.append(depset(patch_files))
 
     # Optional .pyc pre-compilation (runs after patching).
@@ -100,29 +118,25 @@ def _whl_install(ctx):
         ),
     ]
 
-    # Per-configuration metadata selection: `src` resolves (through the
-    # repo rule's select_chain) to exactly one wheel for the active
-    # configuration, and the metadata attrs are dicts keyed by wheel file
-    # basename. Looking up the resolved wheel at analysis time limits the
-    # advertised package surface (top-levels, console scripts) to the
-    # wheel that is actually installed — metadata from inactive platform
-    # wheels must not leak in (e.g. another platform's C-extension
-    # suffix, or a console script shipped only by the win32 wheel).
+    # The metadata attrs are dicts keyed by wheel file basename. Looking up the
+    # resolved wheel at analysis time limits the advertised package surface to
+    # the wheel that is actually installed; metadata from inactive platform
+    # wheels must not leak in.
     # A lookup miss (sbuild fallback, failed extraction at repo-fetch time)
     # leaves the metadata empty. PyWheelsInfo still carries the install tree:
     # venv assembly treats empty top_levels as an unknown layout, while image
     # layering uses install_tree to retain the wheel as a package leaf.
-    whl_basename = ctx.file.src.basename
-    top_levels = ctx.attr.top_levels.get(whl_basename, [])
-    namespace_top_levels = ctx.attr.namespace_top_levels.get(whl_basename, [])
-    namespace_entries = ctx.attr.namespace_entries.get(whl_basename, [])
-    namespace_dirs = ctx.attr.namespace_dirs.get(whl_basename, [])
-    regular_roots = ctx.attr.regular_roots.get(whl_basename, [])
-    console_scripts = ctx.attr.console_scripts.get(whl_basename, [])
+    # Repository metadata describes the wheel before post-install patches run.
+    # Patches may add paths, but the install action preserves every original
+    # path used for collision and merge planning, including its kind and package
+    # classification. Mark the layout incomplete so venv assembly also keeps
+    # the whole-wheel fallback for additions.
+    layout_complete = bool(top_levels) and not patch_files
 
     providers.append(PyWheelsInfo(
         wheels = depset(direct = [struct(
             top_levels = tuple(top_levels),
+            layout_complete = layout_complete,
             # PEP 420 namespace packages this wheel contributes to.
             # When multiple wheels claim the same top-level and ALL of
             # them flag it as namespace, py_binary merges the namespace

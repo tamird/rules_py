@@ -15,6 +15,7 @@ def _metadata_free_wheel_test_impl(ctx):
             wheel = wheels[0]
             asserts.equals(env, (), wheel.top_levels)
             asserts.equals(env, (), wheel.console_scripts)
+            asserts.false(env, wheel.layout_complete)
             asserts.true(env, wheel.install_tree in target[DefaultInfo].files.to_list())
 
     return analysistest.end(env)

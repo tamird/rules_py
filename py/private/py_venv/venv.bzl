@@ -379,11 +379,13 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
             seen[c.site_packages] = True
         console_scripts_map[name] = struct(module = winner.module, func = winner.func)
 
-    # Pass 3: wheels fully covered by direct (or complete per-entry
-    # namespace) symlinks.
+    # Pass 3: complete wheel layouts fully covered by direct (or complete
+    # per-entry namespace) symlinks. Incomplete layouts retain their observed
+    # claims for collision and merge planning but always keep whole-wheel
+    # fallback.
     fully_covered = {}
     for w in wheels:
-        if not w.top_levels:
+        if not w.layout_complete:
             continue
         skipped = skipped_per_wheel.get(w.site_packages_rfpath, {})
         ns_covered = ns_covered_per_wheel.get(w.site_packages_rfpath, {})
@@ -519,7 +521,7 @@ def assemble_venv(
     known_layout_site_pkgs = {
         w.site_packages_rfpath: True
         for w in wheels
-        if w.top_levels
+        if w.layout_complete
     }
 
     declared = []  # accumulator for all outputs
