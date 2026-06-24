@@ -26,12 +26,23 @@ printf 'Metadata-Version: 2.1\nName: collision-%s\nVersion: 1.0\n' "$5" > "$meta
         "collision_namespace",
         metadata_name,
     )
+    directory_top_levels = top_levels
     console_scripts = ()
-    if ctx.attr.ordinary:
+    if ctx.attr.ordinary_kind in ("directory", "untyped_directory"):
         command += """
-printf 'VALUE = %s\n' "$4" > "$site/collision_order.py"
+mkdir -p "$site/collision_order"
+printf 'VALUE = %s\n' "$4" > "$site/collision_order/__init__.py"
+printf 'VALUE = %s\n' "$4" > "$site/collision_order/shared.py"
+printf 'VALUE = %s\n' "$4" > "$site/collision_order/$5.py"
 """
-        top_levels += ("collision_order.py",)
+        top_levels = ("collision_order",) + top_levels
+        directory_top_levels = top_levels if ctx.attr.ordinary_kind == "directory" else ()
+        console_scripts = ("collision-order=collision_namespace.{}:main".format(ctx.attr.value),)
+    elif ctx.attr.ordinary_kind == "file":
+        command += """
+printf 'VALUE = %s\n' "$4" > "$site/collision_order"
+"""
+        top_levels = ("collision_order",) + top_levels
         console_scripts = ("collision-order=collision_namespace.{}:main".format(ctx.attr.value),)
     if ctx.attr.root_pth_name:
         command += """
@@ -62,6 +73,7 @@ printf 'import sys; sys.path.append("rules_py_pth_%s")\n' "$5" > "$site/$6.pth"
     ] + ["lib/python{}.{}/site-packages".format(major, minor)])
     wheel = struct(
         top_levels = top_levels,
+        directory_top_levels = directory_top_levels,
         layout_complete = ctx.attr.layout_complete,
         namespace_top_levels = ("collision_namespace",),
         namespace_entries = (
@@ -94,7 +106,10 @@ _wheel = rule(
     attrs = {
         "layout_complete": attr.bool(default = True),
         "metadata_name": attr.string(),
-        "ordinary": attr.bool(),
+        "ordinary_kind": attr.string(
+            mandatory = True,
+            values = ["directory", "file", "none", "untyped_directory"],
+        ),
         "root_pth_name": attr.string(),
         "value": attr.string(mandatory = True),
     },
@@ -117,13 +132,13 @@ _collision_error_test = analysistest.make(
 def collision_order_test_suite():
     _wheel(
         name = "_collision_first",
-        ordinary = True,
+        ordinary_kind = "directory",
         value = "first",
         tags = ["manual"],
     )
     _wheel(
         name = "_collision_second",
-        ordinary = True,
+        ordinary_kind = "directory",
         value = "second",
         tags = ["manual"],
     )
@@ -167,13 +182,73 @@ def collision_order_test_suite():
     )
     _collision_error_test(
         name = "collision_error_test",
-        expected_error = "namespace entry `collision_namespace/shared.py`",
+        expected_error = "top-level `collision_order`",
         target_under_test = ":_collision_error_binary",
+    )
+    _wheel(
+        name = "_collision_untyped",
+        ordinary_kind = "untyped_directory",
+        value = "untyped",
+        tags = ["manual"],
+    )
+    py_binary(
+        name = "_untyped_collision_error_binary",
+        srcs = ["test_collision_order.py"],
+        main = "test_collision_order.py",
+        package_collisions = "ignore",
+        tags = ["manual"],
+        deps = [
+            ":_collision_first",
+            ":_collision_untyped",
+        ],
+    )
+    _collision_error_test(
+        name = "untyped_collision_error_test",
+        expected_error = "do not declare a nonempty, complete `directory_top_levels`",
+        target_under_test = ":_untyped_collision_error_binary",
+    )
+
+    _wheel(
+        name = "_reset_before",
+        ordinary_kind = "directory",
+        value = "reset_before",
+        tags = ["manual"],
+    )
+    _wheel(
+        name = "_reset_file",
+        ordinary_kind = "file",
+        value = "reset_file",
+        tags = ["manual"],
+    )
+    _wheel(
+        name = "_reset_after",
+        ordinary_kind = "directory",
+        value = "reset_after",
+        tags = ["manual"],
+    )
+    _wheel(
+        name = "_reset_final",
+        ordinary_kind = "directory",
+        value = "reset_final",
+        tags = ["manual"],
+    )
+    py_test(
+        name = "collision_type_reset_test",
+        srcs = ["test_collision_type_reset.py"],
+        main = "test_collision_type_reset.py",
+        package_collisions = "ignore",
+        deps = [
+            ":_reset_before",
+            ":_reset_file",
+            ":_reset_after",
+            ":_reset_final",
+        ],
     )
 
     _wheel(
         name = "_metadata_collision_second",
         metadata_name = "collision_first-1.0.dist-info",
+        ordinary_kind = "none",
         tags = ["manual"],
         value = "metadata_second",
     )
@@ -197,7 +272,7 @@ def collision_order_test_suite():
     _wheel(
         name = "_collision_incomplete",
         layout_complete = False,
-        ordinary = True,
+        ordinary_kind = "directory",
         tags = ["manual"],
         value = "incomplete",
     )
@@ -214,12 +289,13 @@ def collision_order_test_suite():
     )
     _collision_error_test(
         name = "incomplete_collision_error_test",
-        expected_error = "namespace entry `collision_namespace/shared.py`",
+        expected_error = "top-level `collision_order`",
         target_under_test = ":_incomplete_collision_error_binary",
     )
 
     _wheel(
         name = "_pth_collision_complete",
+        ordinary_kind = "none",
         root_pth_name = "collision_marker",
         tags = ["manual"],
         value = "complete",
@@ -227,6 +303,7 @@ def collision_order_test_suite():
     _wheel(
         name = "_pth_collision_incomplete",
         layout_complete = False,
+        ordinary_kind = "none",
         root_pth_name = "collision_marker",
         tags = ["manual"],
         value = "pth_incomplete",
@@ -251,6 +328,7 @@ def collision_order_test_suite():
     _wheel(
         name = "_pth_runtime_incomplete",
         layout_complete = False,
+        ordinary_kind = "none",
         root_pth_name = "incomplete_marker",
         tags = ["manual"],
         value = "incomplete",
@@ -269,11 +347,13 @@ def collision_order_test_suite():
 
     _wheel(
         name = "_namespace_first",
+        ordinary_kind = "none",
         value = "first",
         tags = ["manual"],
     )
     _wheel(
         name = "_namespace_second",
+        ordinary_kind = "none",
         value = "second",
         tags = ["manual"],
     )
@@ -290,4 +370,20 @@ def collision_order_test_suite():
             ":_namespace_first",
             ":_namespace_second",
         ],
+    )
+    py_binary(
+        name = "_namespace_collision_error_binary",
+        srcs = ["test_namespace_fallback.py"],
+        main = "test_namespace_fallback.py",
+        package_collisions = "error",
+        tags = ["manual"],
+        deps = [
+            ":_namespace_first",
+            ":_namespace_second",
+        ],
+    )
+    _collision_error_test(
+        name = "namespace_collision_error_test",
+        expected_error = "namespace entry `collision_namespace/shared.py`",
+        target_under_test = ":_namespace_collision_error_binary",
     )

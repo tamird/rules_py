@@ -193,12 +193,14 @@ Only works with the Aspect rules_py uv machinery.
 
 See `py_binary`'s attribute of the same name for full semantics — the two rules
 share the underlying collision detector. PEP 420 namespace top-levels merge.
-For ordinary top-levels, exact namespace entries, and console scripts,
-permissive modes select the last distinct claimant in the postorder wheel
-sequence. Regular-package spans overlay in that sequence; incompatible
-namespace prefixes retain the shallower entry. Wheels not represented in
-`PyWheelsInfo` remain on the `.pth` fallback. A duplicate dependency edge does
-not reinsert a wheel.
+For ordinary top-levels with complete entry types, permissive modes overlay
+consecutive directory claimants in the postorder wheel sequence; a file
+claimant replaces the earlier sequence. Exact namespace entries and console
+scripts select the last distinct claimant. Regular-package spans overlay in
+that sequence, and incompatible namespace prefixes retain the shallower entry.
+An ordinary collision without complete entry types fails rather than silently
+discarding files. Wheels not represented in `PyWheelsInfo` remain on the
+`.pth` fallback. A duplicate dependency edge does not reinsert a wheel.
 
 * "error": Fail analysis or the physical merge action.
 * "warning" (default): Print a warning and apply the permissive behavior above.
@@ -259,9 +261,8 @@ environment. Forwarded to the sibling py_binary/py_test consumer
         allow_single_file = True,
         default = ":_virtualenv.py",
     ),
-    # Tool for physically merging a regular package that spans wheels
-    # (e.g. azure-core + azure-core-tracing-opentelemetry both
-    # installing into `azure/core/tracing/`) — see assemble_venv.
+    # Tool for physically overlaying colliding directories, including regular
+    # packages that span wheels — see assemble_venv.
     "_site_merge_script": attr.label(
         allow_single_file = True,
         default = "//py/tools/site_merge:site_merge.py",
@@ -276,10 +277,9 @@ _py_venv = rule(
     attrs = _attrs,
     toolchains = [
         PY_TOOLCHAIN,
-        # Optional: only consulted when a regular package spans wheels
-        # and assemble_venv needs an exec-config interpreter to run the
-        # site_merge action. Optional so venvs keep analyzing in setups
-        # that never registered rules_py's exec-tools toolchain.
+        # Optional: only consulted when assemble_venv needs an exec-config
+        # interpreter to overlay colliding directories. Venvs that need no
+        # physical merge can analyze without rules_py's exec-tools toolchain.
         config_common.toolchain_type(EXEC_TOOLS_TOOLCHAIN, mandatory = False),
     ],
     executable = True,

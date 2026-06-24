@@ -1,11 +1,12 @@
 """Site-packages subtree merger for aspect_rules_py venv assembly.
 
-Physically merges one package directory contributed by multiple wheels
-into a single output directory — the shape a flat `pip install` into one
+Physically merges one directory contributed by multiple wheels into a
+single output directory — the shape a flat installation into one
 site-packages would produce.
 
-Needed when a *regular* package (one with an `__init__.py`) spans
-wheels: e.g. azure-core owns `azure/core/` while
+Used for ordinary top-level directory collisions and when a *regular*
+package (one with an `__init__.py`) spans wheels. For example, azure-core owns
+`azure/core/` while
 azure-core-tracing-opentelemetry installs
 `azure/core/tracing/ext/opentelemetry_span/` into that same tree.
 Python locks a regular package's `__path__` to the first directory

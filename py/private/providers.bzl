@@ -8,9 +8,10 @@ target. Every record carries the complete installed tree. Repository-inspected
 wheels also carry their site-packages layout and console scripts; source-built
 wheels may leave that analysis-time metadata empty.
 
-Venv rules project known layouts and generate console-script wrappers. Image
-rules use `install_tree` to retain each wheel as a package leaf independently
-of whether its metadata was available during analysis.
+Venv rules link non-colliding entries, overlay colliding directories, and
+generate console-script wrappers. Image rules use `install_tree` to retain each
+wheel as a package leaf independently of whether its metadata was available
+during analysis.
 """,
     fields = {
         "wheels": """Depset of wheel record structs, one per wheel in the transitive

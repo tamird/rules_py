@@ -74,7 +74,10 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
       entirely. Wheels lacking entry metadata (hand-written
       `py_unpacked_wheel`) keep the historical `.pth`-only fallback,
       where Python's namespace machinery merges contributions at
-      runtime. Otherwise apply `package_collisions` policy.
+      runtime. Otherwise apply `package_collisions` policy. In permissive
+      modes, complete directory layouts are overlaid in wheel order. A file
+      claimant resets an earlier directory sequence, matching the file-level
+      installation semantics of rules_py 1.11.2.
 
       Within an all-namespace top-level there's one shape `.pth` +
       `addsitedir` cannot handle: a REGULAR package spanning wheels.
@@ -108,9 +111,8 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
           a complete namespace merge) — safe to drop from the .pth fallback.
       console_scripts_map: dict {script_name: struct(module, func)} after
           collision resolution.
-      merge_groups: list of struct(root, site_packages_list) — regular
-          package dirs (site-packages-relative paths) that span wheels
-          and need a physical merge, with the contributing wheels'
+      merge_groups: list of struct(root, site_packages_list) — directories
+          that need a physical merge, with the contributing wheels'
           site-packages paths in wheel traversal order.
     """
 
@@ -136,6 +138,9 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
     wheel_by_sp = {}  # site_packages_rfpath -> wheel struct
     for w in wheels:
         wheel_by_sp[w.site_packages_rfpath] = w
+        directory_top_levels = getattr(w, "directory_top_levels", ())
+        directory_set = {tl: True for tl in directory_top_levels}
+        layout_typed = bool(w.top_levels) and bool(directory_top_levels)
         ns_set = {tl: True for tl in getattr(w, "namespace_top_levels", ())}
         ns_entries_by_tl = {}
         for entry in getattr(w, "namespace_entries", ()):
@@ -158,6 +163,8 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
             tl_claimants.setdefault(tl, []).append(struct(
                 site_packages = w.site_packages_rfpath,
                 layout_complete = w.layout_complete,
+                is_directory = tl in directory_set,
+                layout_typed = layout_typed,
                 is_ns = tl in ns_set,
                 ns_entries = tuple(ns_entries_by_tl.get(tl, [])),
             ))
@@ -187,19 +194,27 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
     top_level_to_site_pkgs = {}
     skipped_per_wheel = {}
     ns_covered_per_wheel = {}
+    ordinary_covered_per_wheel = {}
+    ordinary_merge_groups = []
     conflicted_roots = {}  # root path -> True (regular package spanning wheels)
     ns_claimant_sps = {}  # sp -> True, wheels in any all-namespace collision
     for tl, claimants in tl_claimants.items():
         distinct_sp = {c.site_packages: c for c in claimants}
-        processed_pth = tl.endswith(".pth") and not tl.startswith(".")
+        pth_name = tl.endswith(".pth") and not tl.startswith(".")
         if len(distinct_sp) == 1:
             claimant = claimants[0]
-            if not processed_pth or claimant.layout_complete:
+            fallback_owns_pth = (
+                pth_name and
+                not claimant.layout_complete and
+                (not claimant.layout_typed or not claimant.is_directory)
+            )
+            if not fallback_owns_pth:
                 top_level_to_site_pkgs[tl] = claimant.site_packages
             continue
 
-        if processed_pth and any([
-            not c.layout_complete
+        if pth_name and any([
+            not c.layout_complete and
+            (not c.layout_typed or not c.is_directory)
             for c in distinct_sp.values()
         ]):
             fail(("{}: root `.pth` file `{}` collides across wheels, but an " +
@@ -351,16 +366,57 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
                     ns_covered_per_wheel.setdefault(c.site_packages, {})[tl] = True
             continue
 
-        winner = claimants[0]
-        seen = {winner.site_packages: True}
-        for c in claimants[1:]:
-            if c.site_packages in seen:
+        distinct_claimants = []
+        distinct_seen = {}
+        for c in claimants:
+            if c.site_packages in distinct_seen:
                 continue
-            _complain("top-level", tl, winner.site_packages, c.site_packages)
-            skipped_per_wheel.setdefault(winner.site_packages, {})[tl] = True
-            winner = c
-            seen[c.site_packages] = True
-        top_level_to_site_pkgs[tl] = winner.site_packages
+            distinct_seen[c.site_packages] = True
+            distinct_claimants.append(c)
+
+        untyped = [c.site_packages for c in distinct_claimants if not c.layout_typed]
+        if untyped:
+            if package_collisions == "error":
+                _complain(
+                    "top-level",
+                    tl,
+                    distinct_claimants[0].site_packages,
+                    distinct_claimants[1].site_packages,
+                )
+            fail(("{}: top-level `{}` collides, but wheels {} do not declare a " +
+                  "nonempty, complete `directory_top_levels`; omit `top_levels` to " +
+                  "preserve the complete wheel root or declare its entry types.").format(
+                ctx.label,
+                tl,
+                untyped,
+            ))
+
+        # Reproduce the old file-level overlay: a file replaces every earlier
+        # claimant, while consecutive trailing directories merge. Strict mode
+        # still rejects the collision in _complain before any plan is recorded.
+        prior = distinct_claimants[0]
+        for c in distinct_claimants[1:]:
+            _complain("top-level", tl, prior.site_packages, c.site_packages)
+            prior = c
+
+        for c in distinct_claimants:
+            ordinary_covered_per_wheel.setdefault(c.site_packages, {})[tl] = True
+
+        trailing_directories = []
+        for c in distinct_claimants:
+            if c.is_directory:
+                trailing_directories.append(c)
+            else:
+                trailing_directories = []
+
+        winner = distinct_claimants[-1]
+        if winner.is_directory and len(trailing_directories) > 1:
+            ordinary_merge_groups.append(struct(
+                root = tl,
+                site_packages_list = [c.site_packages for c in trailing_directories],
+            ))
+        else:
+            top_level_to_site_pkgs[tl] = winner.site_packages
 
     # Pass 2a: fold conflicted roots into merge groups. Keep only the
     # minimal (shallowest) roots — a conflicted root nested inside
@@ -368,7 +424,7 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
     # each root, the contributors are every namespace-claimant wheel
     # that has the root in its skeleton (content below it) or as its
     # own regular root, in wheel traversal order.
-    merge_groups = []
+    merge_groups = list(ordinary_merge_groups)
     minimal_roots = []
     for root in sorted(conflicted_roots.keys()):
         nested = False
@@ -424,9 +480,10 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
             continue
         skipped = skipped_per_wheel.get(w.site_packages_rfpath, {})
         ns_covered = ns_covered_per_wheel.get(w.site_packages_rfpath, {})
+        ordinary_covered = ordinary_covered_per_wheel.get(w.site_packages_rfpath, {})
         covered = True
         for tl in w.top_levels:
-            if tl in metadata_owners:
+            if tl in metadata_owners or tl in ordinary_covered:
                 continue
             if tl in skipped:
                 covered = False
@@ -483,10 +540,10 @@ def assemble_venv(
       virtualenv_shim_py: File — the `_virtualenv.py` distutils shim
         source (usually `ctx.file._virtualenv_shim`).
       site_merge_script_py: File — the site_merge.py tool source
-        (usually `ctx.file._site_merge_script`). Only needed when the
-        wheel graph contains a regular package spanning wheels; the
-        merge action also requires the rule to declare the (optional)
-        EXEC_TOOLS_TOOLCHAIN for an exec-configuration interpreter.
+        (usually `ctx.file._site_merge_script`). Only needed when the wheel
+        graph requires a physical directory overlay; the merge action also
+        requires the rule to declare the (optional) EXEC_TOOLS_TOOLCHAIN for
+        an exec-configuration interpreter.
       venv_name: Optional str — explicit venv dir basename. Defaults to
         "." + safe_name + ".venv" when unset.
 
@@ -588,22 +645,20 @@ def assemble_venv(
         )
         declared.append(out)
 
-    # Physical merges for regular packages that span wheels (see
-    # _resolve_wheel_collisions). Each group's subtree is copied from
-    # every contributing wheel into a real directory inside our
-    # site-packages — the layout a flat `pip install` produces. The
+    # Physical merges for colliding directories and regular packages that
+    # span wheels (see _resolve_wheel_collisions). Each group's subtree is
+    # copied from every contributing wheel into a real directory inside our
+    # site-packages — the layout a flat installation produces. The
     # venv's own site-packages precedes the per-wheel `.pth` entries on
     # sys.path, so the merged copy is the one Python binds the regular
     # package's `__path__` to; the per-wheel originals are shadowed.
     #
     # The merge runs as a build action under the exec-configuration
     # interpreter (same shape as WhlInstall's unpack action). Wheels
-    # without an install_tree (legacy py_unpacked_wheel) can't
-    # contribute — they also never carry the metadata that forms a
-    # merge group, so they can't appear here.
+    # without an install_tree cannot contribute.
     for group in merge_groups:
         if site_merge_script_py == None:
-            fail(("{}: wheels {} all contribute to the regular package `{}` — merging it " +
+            fail(("{}: wheels {} all contribute to directory `{}` — merging it " +
                   "requires the venv rule to supply the site_merge tool.").format(
                 ctx.label,
                 group.site_packages_list,
@@ -612,7 +667,7 @@ def assemble_venv(
         exec_toolchain = ctx.toolchains[EXEC_TOOLS_TOOLCHAIN]
         exec_runtime = exec_toolchain.exec_tools.exec_runtime if exec_toolchain else None
         if exec_runtime == None:
-            fail(("{}: wheels {} all contribute to the regular package `{}` — merging it " +
+            fail(("{}: wheels {} all contribute to directory `{}` — merging it " +
                   "requires an exec-configuration Python interpreter, but no `{}` toolchain " +
                   "was registered.").format(
                 ctx.label,
@@ -632,7 +687,7 @@ def assemble_venv(
         for sp in group.site_packages_list:
             tree = tree_by_sp.get(sp)
             if tree == None:
-                fail("{}: wheel at {} contributes to merged package `{}` but has no install_tree.".format(
+                fail("{}: wheel at {} contributes to merged directory `{}` but has no install_tree.".format(
                     ctx.label,
                     sp,
                     group.root,

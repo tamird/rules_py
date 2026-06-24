@@ -3,11 +3,9 @@ load(":metadata_test.bzl", "metadata_free_wheel_test")
 
 # Regression gate for assemble_venv's `_format_imp` fallback (see
 # double_pth_test.py). Two hand-built wheels, each emitting PyWheelsInfo
-# (they set `top_levels`) and each shipping a distinct root `.pth` that
-# appends a unique sentinel to sys.path. Both claim the top-level
-# `shared`, so the collision loser is forced through the
-# `site.addsitedir` fallback — where a wheel-root `.pth` whose top-level
-# was also projected into the venv would otherwise fire twice.
+# and shipping a distinct root `.pth`, contribute to the `shared` namespace.
+# The first declares its concrete entry while the second omits namespace-entry
+# metadata, forcing only the second wheel through the known-layout fallback.
 
 # A wheel is just a zip; build minimal ones with the prebuilt zipper so
 # the test needs no pip / uv environment. Internal layout mirrors what
@@ -26,7 +24,7 @@ genrule(
     cmd = " ".join([
         "$(execpath @bazel_tools//tools/zip:zipper) c $@",
         "apkg/__init__.py=$(execpath a/apkg/__init__.py)",
-        "shared/__init__.py=$(execpath a/shared/__init__.py)",
+        "shared/a.py=$(execpath a/shared/__init__.py)",
         "a_marker.pth=$(execpath a/a_marker.pth)",
         "pthtest_a-1.0.dist-info/entry_points.txt=$(execpath a/entry_points.txt)",
         "pthtest_a-1.0.dist-info/METADATA=$(execpath a/METADATA)",
@@ -46,7 +44,7 @@ genrule(
     cmd = " ".join([
         "$(execpath @bazel_tools//tools/zip:zipper) c $@",
         "bpkg/__init__.py=$(execpath b/bpkg/__init__.py)",
-        "shared/__init__.py=$(execpath b/shared/__init__.py)",
+        "shared/b.py=$(execpath b/shared/__init__.py)",
         "b_marker.pth=$(execpath b/b_marker.pth)",
         "pthtest_b-1.0.dist-info/METADATA=$(execpath b/METADATA)",
     ]),
@@ -56,6 +54,13 @@ genrule(
 py_unpacked_wheel(
     name = "pthtest_a",
     src = ":pthtest_a-1.0-py3-none-any.whl",
+    directory_top_levels = [
+        "apkg",
+        "pthtest_a-1.0.dist-info",
+        "shared",
+    ],
+    namespace_entries = ["shared/a.py"],
+    namespace_top_levels = ["shared"],
     # `a_marker.pth` is a depth-1 RECORD entry, so a real wheel-install
     # lists it among the top-levels; declaring it here projects it into
     # the venv site-packages exactly as uv's whl_install would.
@@ -70,6 +75,13 @@ py_unpacked_wheel(
 py_unpacked_wheel(
     name = "pthtest_b",
     src = ":pthtest_b-1.0-py3-none-any.whl",
+    directory_top_levels = [
+        "bpkg",
+        "pthtest_b-1.0.dist-info",
+        "shared",
+    ],
+    # Omitting entries keeps this known layout on the .pth fallback.
+    namespace_top_levels = ["shared"],
     top_levels = [
         "bpkg",
         "pthtest_b-1.0.dist-info",
@@ -105,9 +117,6 @@ py_test(
     # isolated launcher suppresses.
     isolated = False,
     main = "double_pth_test.py",
-    # The two wheels collide on `shared`; downgrade so the build doesn't
-    # fail before the venv is assembled.
-    package_collisions = "warning",
     deps = [
         ":pthtest_a",
         ":pthtest_b",

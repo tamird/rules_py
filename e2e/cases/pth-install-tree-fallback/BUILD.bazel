@@ -1,19 +1,10 @@
 load("@aspect_rules_py//py:defs.bzl", "py_test", "py_unpacked_wheel")
 load("//tools:pth_snapshot.bzl", "extract_venv_pth")
 
-# Snapshot fixture for assemble_venv's `_format_imp` install_tree branch.
-#
-# Two hand-built wheels, each carrying PyWheelsInfo (they set `top_levels`,
-# so each gets an `install_tree`) and each shipping a distinct root `.pth`.
-# Both claim the top-level `shared`, so the collision loser is NOT fully
-# covered and surfaces as a site-packages line in the venv `.pth`.
-#
-# That line is exactly the one `_format_imp` must emit as a PLAIN escape
-# path, not `site.addsitedir(...)`: the loser's root `.pth` was already
-# projected into the venv site-packages by the per-top-level symlinks, so
-# `addsitedir` would re-run it (see the runtime guard at
-# @aspect_rules_py//py/tests/wheel-root-pth-double). The pinned snapshot
-# makes that line shape visible — reverting to `addsitedir` changes it.
+# Two complete hand-built layouts collide on the directory `shared` and the
+# file `marker.pth`. The directory is overlaid so both wheels' unique entries
+# survive and later files win. Only the later root `.pth` is projected; both
+# wheel roots are fully represented and therefore absent from the venv `.pth`.
 
 # A wheel is just a zip; build minimal ones with the prebuilt zipper so the
 # fixture needs no pip / uv environment. Internal layout mirrors what the
@@ -60,6 +51,11 @@ genrule(
 py_unpacked_wheel(
     name = "itfa",
     src = ":itfa-1.0-py3-none-any.whl",
+    directory_top_levels = [
+        "apkg",
+        "itfa-1.0.dist-info",
+        "shared",
+    ],
     # `marker.pth` is a depth-1 RECORD entry, so a real wheel-install lists
     # it among the top-levels; declaring it projects it into the venv
     # site-packages exactly as uv's whl_install would.
@@ -74,6 +70,11 @@ py_unpacked_wheel(
 py_unpacked_wheel(
     name = "itfb",
     src = ":itfb-1.0-py3-none-any.whl",
+    directory_top_levels = [
+        "bpkg",
+        "itfb-1.0.dist-info",
+        "shared",
+    ],
     top_levels = [
         "bpkg",
         "itfb-1.0.dist-info",

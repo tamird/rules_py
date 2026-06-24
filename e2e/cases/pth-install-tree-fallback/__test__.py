@@ -1,9 +1,6 @@
-"""Sanity check for the snapshot fixture: the colliding venv imports cleanly.
+"""Regular directories overlay while colliding files remain last-wins."""
 
-The real assertion lives in the pinned `.pth` snapshot (see the e2e
-`write_source_files` registry); this just keeps the fixture honest by
-exercising both wheels at runtime.
-"""
+import sys
 
 import apkg
 import bpkg
@@ -11,5 +8,6 @@ import shared
 
 assert apkg.VALUE == "apkg"
 assert bpkg.VALUE == "bpkg"
-# One of the two `shared` contributors wins; we only care that it resolves.
-assert shared.OWNER in ("a", "b")
+assert shared.OWNER == "b"
+assert "rules_py_itf_sentinel_a" not in sys.path
+assert "rules_py_itf_sentinel_b" in sys.path
