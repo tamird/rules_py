@@ -1,15 +1,35 @@
-# FIXME(bzlmod): Need to sort out why this is failing now
-#
-# # Test that cc targets can be used as deps for py targets.
-# # We only add a very simple test to not pull in all the deps
-# # to build proper py-bindings.
-# cc_library(
-#     name = "example_library",
-#     srcs = ["example_library.cpp"],
-# )
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("//py:defs.bzl", "py_library", "py_test")
 
-# py_test(
-#     name = "test_smoke",
-#     srcs = ["test_smoke.py"],
-#     deps = [":example_library"],
-# )
+_WINDOWS_INCOMPATIBLE = select({
+    "@platforms//os:windows": ["@platforms//:incompatible"],
+    "//conditions:default": [],
+})
+
+cc_binary(
+    name = "example_library.so",
+    testonly = True,
+    srcs = ["example_library.cpp"],
+    linkshared = True,
+    target_compatible_with = _WINDOWS_INCOMPATIBLE,
+    deps = [
+        "@rules_python//python/cc:current_py_cc_headers",
+        "@rules_python//python/cc:current_py_cc_libs",
+    ],
+)
+
+py_library(
+    name = "example_library",
+    testonly = True,
+    data = [":example_library.so"],
+    imports = ["."],
+    target_compatible_with = _WINDOWS_INCOMPATIBLE,
+)
+
+py_test(
+    name = "test_smoke",
+    srcs = ["test_smoke.py"],
+    python_version = "3.13",
+    target_compatible_with = _WINDOWS_INCOMPATIBLE,
+    deps = [":example_library"],
+)
