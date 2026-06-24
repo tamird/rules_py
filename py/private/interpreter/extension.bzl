@@ -345,6 +345,7 @@ def _python_interpreters_impl(module_ctx):
                     "config_settings": settings["config_settings"],
                     "target_compatible_with": settings["target_compatible_with"],
                     "exec_compatible_with": settings["exec_compatible_with"],
+                    "register_exec_tools": platform_info["register_exec_tools"],
                 }))
 
         if not version_found:
