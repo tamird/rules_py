@@ -14,6 +14,7 @@ _PRE_RELEASE_ORDER = {
     "rc": 2,
 }
 _RELEASE_ORDER = 3  # No suffix = final release
+_RELEASE_LEVELS = ["alpha", "beta", "candidate", "final"]
 
 def is_decimal(value):
     """Whether value consists of one or more ASCII decimal digits."""
@@ -58,6 +59,21 @@ def version_key(v):
     for p in parts:
         result.append(_parse_pre_release(p))
     return result
+
+def parse_version_info(v):
+    """Parse a Python version into the fields exposed by sys.version_info."""
+    parts = v.split(".")
+    if len(parts) < 2 or len(parts) > 3:
+        fail("Python version must have two or three components, got '{}'".format(v))
+
+    micro, release_order, serial = _parse_pre_release(parts[2] if len(parts) == 3 else "0")
+    return struct(
+        major = int(parts[0]),
+        micro = micro,
+        minor = int(parts[1]),
+        releaselevel = _RELEASE_LEVELS[release_order],
+        serial = serial,
+    )
 
 def is_pre_release(v):
     """Returns True if version string v is a pre-release (alpha, beta, or rc).

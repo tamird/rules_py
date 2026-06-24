@@ -1,7 +1,7 @@
 """Tests for version_util.bzl."""
 
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
-load("//py/private/interpreter:version_util.bzl", "is_pre_release", "version_gt", "version_key")
+load("//py/private/interpreter:version_util.bzl", "is_pre_release", "parse_version_info", "version_gt", "version_key")
 
 def _version_key_test_impl(ctx):
     env = unittest.begin(ctx)
@@ -26,6 +26,36 @@ def _version_key_test_impl(ctx):
     return unittest.end(env)
 
 version_key_test = unittest.make(_version_key_test_impl)
+
+def _parse_version_info_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    asserts.equals(
+        env,
+        struct(
+            major = 3,
+            micro = 0,
+            minor = 15,
+            releaselevel = "alpha",
+            serial = 6,
+        ),
+        parse_version_info("3.15.0a6"),
+    )
+    asserts.equals(
+        env,
+        struct(
+            major = 3,
+            micro = 0,
+            minor = 15,
+            releaselevel = "final",
+            serial = 0,
+        ),
+        parse_version_info("3.15"),
+    )
+
+    return unittest.end(env)
+
+parse_version_info_test = unittest.make(_parse_version_info_test_impl)
 
 def _version_gt_basic_test_impl(ctx):
     env = unittest.begin(ctx)
@@ -106,6 +136,7 @@ is_pre_release_test = unittest.make(_is_pre_release_test_impl)
 def version_util_test_suite():
     unittest.suite(
         "version_util_tests",
+        parse_version_info_test,
         version_key_test,
         version_gt_basic_test,
         version_gt_prerelease_test,
