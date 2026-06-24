@@ -17,5 +17,6 @@ use_repo(
     "python_3_13_x86_64_unknown_linux_gnu_freethreaded_pgo_lto",
     "python_3_14_x86_64_pc_windows_msvc",
     "python_3_14_x86_64_unknown_linux_gnu",
+    "python_3_14_x86_64_unknown_linux_gnu_freethreaded_debug",
     "python_3_14_x86_64_unknown_linux_gnu_freethreaded_pgo_lto",
 )

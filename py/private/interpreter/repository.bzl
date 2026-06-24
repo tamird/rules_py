@@ -53,18 +53,25 @@ def _parse_pyc_magic_number(content, source_kind, description):
     return magic_number
 
 def _read_pyc_magic_number(rctx, major, minor, is_windows):
-    abi_suffix = "t" if rctx.attr.freethreaded else ""
-    version = "{}.{}{}".format(major, minor, abi_suffix)
     if is_windows:
-        paths = [
-            "include/internal/pycore_magic_number.h",
-            "Lib/importlib/_bootstrap_external.py",
+        sources = [
+            ("include/internal/pycore_magic_number.h", "header"),
+            ("Lib/importlib/_bootstrap_external.py", "source"),
         ]
     else:
-        paths = [
-            "include/python{}/internal/pycore_magic_number.h".format(version),
-            "lib/python{}/importlib/_bootstrap_external.py".format(version),
-        ]
+        # Free-threaded debug builds use the combined `td` ABI suffix for
+        # headers. Search it before the regular free-threaded `t` layout.
+        abi_suffixes = ["td", "t"] if rctx.attr.freethreaded else [""]
+        sources = []
+        for source_kind, path_template in [
+            ("header", "include/python{}.{}{}/internal/pycore_magic_number.h"),
+            ("source", "lib/python{}.{}{}/importlib/_bootstrap_external.py"),
+        ]:
+            for abi_suffix in abi_suffixes:
+                sources.append((
+                    path_template.format(major, minor, abi_suffix),
+                    source_kind,
+                ))
 
     mode = "free-threaded" if rctx.attr.freethreaded else "regular"
     description = "PBS Python {} for {} ({})".format(
@@ -72,7 +79,7 @@ def _read_pyc_magic_number(rctx, major, minor, is_windows):
         rctx.attr.platform,
         mode,
     )
-    for path, source_kind in [(paths[0], "header"), (paths[1], "source")]:
+    for path, source_kind in sources:
         if rctx.path(path).exists:
             return _parse_pyc_magic_number(
                 rctx.read(path),
@@ -80,7 +87,10 @@ def _read_pyc_magic_number(rctx, major, minor, is_windows):
                 "{} {}".format(description, path),
             )
 
-    fail("{} contains neither {} nor {}".format(description, paths[0], paths[1]))
+    fail("{} contains none of {}".format(
+        description,
+        ", ".join([path for path, _ in sources]),
+    ))
 
 def _python_interpreter_impl(rctx):
     """Downloads and extracts a Python interpreter from PBS."""

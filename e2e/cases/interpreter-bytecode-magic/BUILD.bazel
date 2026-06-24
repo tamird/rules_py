@@ -41,6 +41,14 @@ bytecode_magic_test(
 )
 
 bytecode_magic_test(
+    name = "python_3_14_freethreaded_debug",
+    expected_magic_number = 3627,
+    expected_python_version = "3.14",
+    runtime_pair = "@python_3_14_x86_64_unknown_linux_gnu_freethreaded_debug//:runtime_pair",
+    tags = ["manual"],
+)
+
+bytecode_magic_test(
     name = "python_3_14_windows",
     expected_magic_number = 3627,
     expected_python_version = "3.14",

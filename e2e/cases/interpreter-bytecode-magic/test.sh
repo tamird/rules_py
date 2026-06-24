@@ -14,6 +14,7 @@ if ! "$BAZEL" test --lockfile_mode=off -- \
     //:python_3_13_windows \
     //:python_3_14 \
     //:python_3_14_freethreaded \
+    //:python_3_14_freethreaded_debug \
     //:python_3_14_windows; then
     echo "FAIL: PBS bytecode magic does not match its interpreter" >&2
     exit 1
