@@ -180,9 +180,10 @@ uv.override_package(
 - `pre_build_patches`, `toolchains`, `env`, and non-default `resource_set`
   values require a source distribution. An override that applies them to a
   wheel-only lock record is rejected.
-- A configure tool that returns complete `build_file_content` owns its PEP 517
-  rule. Build-only override attributes are rejected unless the configure tool
-  incorporates them into that content.
+- A configure tool that returns complete `build_file_content` receives
+  `pre_build_patches` and `pre_build_patch_strip` in its context and owns
+  applying them. `toolchains`, `env`, and non-default `resource_set` values are
+  rejected because the configure context cannot convey them.
 
 ## Future work
 

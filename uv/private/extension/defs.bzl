@@ -62,7 +62,6 @@ load("//uv/private:parse_whl_name.bzl", "parse_whl_name")
 load("//uv/private/constraints:repository.bzl", "configurations_hub")
 load("//uv/private/git_archive:repository.bzl", "git_archive")
 load("//uv/private/pprint:defs.bzl", "pprint")
-load("//uv/private/sdist_build:attrs.bzl", "active_build_only_attrs")
 load("//uv/private/sdist_build:repository.bzl", "sdist_build")
 load("//uv/private/sdist_configure:defs.bzl", "DEFAULT_CONFIGURE_SCRIPT")
 load("//uv/private/tomltool:toml.bzl", "toml")
@@ -376,14 +375,19 @@ def _parse_projects(module_ctx, hub_specs):
                 if is_no_binary and not sdist:
                     fail("Package {} is in [tool.uv] no-binary-package but has no sdist in the lockfile".format(package["name"]))
                 if pkg_override and not sdist:
-                    build_only_attrs = active_build_only_attrs(
-                        resource_set = pkg_override.resource_set,
-                        env = pkg_override.env,
-                        monitor_memory = pkg_override.monitor_memory,
-                        pre_build_patches = pkg_override.pre_build_patches,
-                        pre_build_patch_strip = pkg_override.pre_build_patch_strip,
-                        toolchains = pkg_override.toolchains,
-                    )
+                    build_only_attrs = []
+                    if pkg_override.resource_set != "default":
+                        build_only_attrs.append("resource_set")
+                    if pkg_override.env:
+                        build_only_attrs.append("env")
+                    if pkg_override.monitor_memory:
+                        build_only_attrs.append("monitor_memory")
+                    if pkg_override.pre_build_patches:
+                        build_only_attrs.append("pre_build_patches")
+                    if pkg_override.pre_build_patch_strip:
+                        build_only_attrs.append("pre_build_patch_strip")
+                    if pkg_override.toolchains:
+                        build_only_attrs.append("toolchains")
                     if build_only_attrs:
                         fail("uv.override_package() for '{}=={}' in lock '{}': build-only attributes require a source distribution, but the lock record has only wheels: {}".format(
                             package["name"],

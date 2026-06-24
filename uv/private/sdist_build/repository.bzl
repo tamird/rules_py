@@ -7,7 +7,6 @@ appropriate backend-specific build rule (e.g. pep517_whl, maturin_whl).
 """
 
 load("//uv/private:normalize_name.bzl", "normalize_name")
-load(":attrs.bzl", "active_build_only_attrs")
 
 # --- Configure tool invocation ---
 
@@ -176,14 +175,15 @@ def _sdist_build_impl(repository_ctx):
                 # Pre-build patch settings are part of the configure context,
                 # so complete custom content can incorporate them. These
                 # settings are not, and therefore require the generated rule.
-                bypassed_attrs = active_build_only_attrs(
-                    resource_set = repository_ctx.attr.resource_set,
-                    env = repository_ctx.attr.extra_env,
-                    monitor_memory = repository_ctx.attr.monitor_memory,
-                    pre_build_patches = [],
-                    pre_build_patch_strip = 0,
-                    toolchains = repository_ctx.attr.extra_toolchains,
-                )
+                bypassed_attrs = []
+                if repository_ctx.attr.resource_set != "default":
+                    bypassed_attrs.append("resource_set")
+                if repository_ctx.attr.extra_env:
+                    bypassed_attrs.append("env")
+                if repository_ctx.attr.monitor_memory:
+                    bypassed_attrs.append("monitor_memory")
+                if repository_ctx.attr.extra_toolchains:
+                    bypassed_attrs.append("toolchains")
                 if bypassed_attrs:
                     fail("sdist_build for '{}': the configure tool returned complete `build_file_content`, which bypasses the generated `pep517_*whl(...)` call, so these attributes cannot be applied: {}. Drop them from the override, or have the configure tool set them in its own `build_file_content`.".format(
                         repository_ctx.name,
