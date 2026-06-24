@@ -62,6 +62,7 @@ load("//uv/private:parse_whl_name.bzl", "parse_whl_name")
 load("//uv/private/constraints:repository.bzl", "configurations_hub")
 load("//uv/private/git_archive:repository.bzl", "git_archive")
 load("//uv/private/pprint:defs.bzl", "pprint")
+load("//uv/private/sdist_build:attrs.bzl", "active_build_only_attrs")
 load("//uv/private/sdist_build:repository.bzl", "sdist_build")
 load("//uv/private/sdist_configure:defs.bzl", "DEFAULT_CONFIGURE_SCRIPT")
 load("//uv/private/tomltool:toml.bzl", "toml")
@@ -247,6 +248,10 @@ def _parse_projects(module_ctx, hub_specs):
                     ))
 
                 has_target = override.target != None
+                if override.pre_build_patch_strip and not override.pre_build_patches:
+                    fail("uv.override_package() for '{}': `pre_build_patch_strip` requires `pre_build_patches`.".format(override.name))
+                if override.post_install_patch_strip and not override.post_install_patches:
+                    fail("uv.override_package() for '{}': `post_install_patch_strip` requires `post_install_patches`.".format(override.name))
                 has_modifications = (
                     override.pre_build_patches or
                     override.post_install_patches or
@@ -360,6 +365,7 @@ def _parse_projects(module_ctx, hub_specs):
                 install_table[install_key] = install_target
                 sbuild_id = "sdist_build__{}__{}__{}".format(project_stamp, package["name"], normalize_version(package["version"]))
                 sdist = sdist_table.get(sbuild_id)
+                pkg_override = package_overrides.get((normalize_name(package["name"]), package["version"]))
 
                 # WARNING: Loop invariant; this flag needs to be False by
                 # default and set if we do a build.
@@ -369,6 +375,22 @@ def _parse_projects(module_ctx, hub_specs):
 
                 if is_no_binary and not sdist:
                     fail("Package {} is in [tool.uv] no-binary-package but has no sdist in the lockfile".format(package["name"]))
+                if pkg_override and not sdist:
+                    build_only_attrs = active_build_only_attrs(
+                        resource_set = pkg_override.resource_set,
+                        env = pkg_override.env,
+                        monitor_memory = pkg_override.monitor_memory,
+                        pre_build_patches = pkg_override.pre_build_patches,
+                        pre_build_patch_strip = pkg_override.pre_build_patch_strip,
+                        toolchains = pkg_override.toolchains,
+                    )
+                    if build_only_attrs:
+                        fail("uv.override_package() for '{}=={}' in lock '{}': build-only attributes require a source distribution, but the lock record has only wheels: {}".format(
+                            package["name"],
+                            package["version"],
+                            project.lock,
+                            ", ".join(build_only_attrs),
+                        ))
                 if sdist:
                     # HACK: Note that we resolve these LAZILY so that
                     # bdist-only or fully overridden configurations don't
@@ -401,7 +423,6 @@ def _parse_projects(module_ctx, hub_specs):
                     build_deps = sets.to_list(sets.make(build_deps + lock_build_deps))
 
                     # Look up pre-build patches for this package
-                    pkg_override = package_overrides.get((normalize_name(package["name"]), package["version"]))
                     pre_build_patches = []
                     pre_build_patch_strip = 0
                     if pkg_override and pkg_override.pre_build_patches:
@@ -439,7 +460,6 @@ def _parse_projects(module_ctx, hub_specs):
                     has_sbuild = True
 
                 # Look up post-install patches and BUILD modifications
-                pkg_override = package_overrides.get((normalize_name(package["name"]), package["version"]))
                 post_install_patches = []
                 post_install_patch_strip = 0
                 extra_deps = []
@@ -449,11 +469,6 @@ def _parse_projects(module_ctx, hub_specs):
                     post_install_patch_strip = pkg_override.post_install_patch_strip
                     extra_deps = [str(d) for d in pkg_override.extra_deps]
                     extra_data = [str(d) for d in pkg_override.extra_data]
-
-                if pkg_override and pkg_override.resource_set != "default" and not has_sbuild:
-                    fail("uv.override_package() for '{}': `resource_set` reserves resources for the sdist wheel-build action, but this package resolves to a prebuilt wheel (there is no sdist build to reserve for). Remove `resource_set`, or force a source build via `[tool.uv] no-binary-package`.".format(pkg_override.name))
-                if pkg_override and pkg_override.monitor_memory and not has_sbuild:
-                    fail("uv.override_package() for '{}': `monitor_memory` observes the sdist wheel-build action, but this package resolves to a prebuilt wheel. Remove `monitor_memory`, or force a source build via `[tool.uv] no-binary-package`.".format(pkg_override.name))
 
                 # uv can emit multiple lock records for the same package/version
                 # (e.g. resolution-marker forks), each carrying a different
