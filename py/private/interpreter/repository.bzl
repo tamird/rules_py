@@ -31,14 +31,29 @@ def _python_interpreter_impl(rctx):
     # converts micro and serial to integers:
     # https://github.com/bazel-contrib/rules_python/blob/1.0.0/python/private/py_runtime_rule.bzl#L280-L292
     version_info = parse_version_info(python_version)
+    major = str(version_info.major)
+    minor = str(version_info.minor)
+
+    supports_abi3 = "t" not in rctx.attr.abi_flags
+    if not supports_abi3:
+        include_dir = "include" if is_windows else "include/python{}.{}{}".format(major, minor, rctx.attr.abi_flags)
+        pyabi = rctx.path(include_dir + "/pyabi.h")
+
+        # abi3t landed during Python 3.15 development. Detect the capability
+        # from the extracted archive rather than assuming it from the version:
+        # https://github.com/python/cpython/blob/3.15/Include/pyabi.h
+        supports_abi3 = pyabi.exists and "Py_TARGET_ABI3T" in rctx.read(pyabi)
 
     # Delete terminfo symlink loops on newer PBS releases (linux only)
     if "linux" in platform:
         rctx.delete("share/terminfo")
 
     rctx.file("BUILD.bazel", content = _build_file_content(
+        abi_flags = rctx.attr.abi_flags,
         python_bin = python_bin,
         is_windows = is_windows,
+        platform = platform,
+        supports_abi3 = supports_abi3,
         version_info = version_info,
     ))
 
@@ -81,7 +96,7 @@ filegroup(
 
     return "\n".join(lines), all_excludes
 
-def _build_file_content(python_bin, is_windows, version_info):
+def _build_file_content(abi_flags, python_bin, is_windows, platform, supports_abi3, version_info):
     """Generate the full BUILD.bazel content for an interpreter repo."""
 
     major = str(version_info.major)
@@ -99,6 +114,81 @@ def _build_file_content(python_bin, is_windows, version_info):
             releaselevel = version_info.releaselevel,
             serial = version_info.serial,
         )
+
+    include_dirs = ["include"]
+    if not is_windows:
+        include_dirs.append("include/python{}.{}{}".format(major, minor, abi_flags))
+
+    is_freethreaded = "t" in abi_flags
+    stable_abi_suffix = "t" if is_freethreaded else ""
+
+    interface_targets = ""
+    header_interface_deps = []
+    abi3_interface_deps = []
+    if is_windows:
+        # Full-ABI extensions link the versioned import library. Stable-ABI
+        # extensions link python3.lib, or python3t.lib for abi3t.
+        # https://github.com/python/cpython/blob/3.15/PCbuild/readme.txt
+        interface_targets = """\
+cc_import(
+    name = "interface",
+    interface_library = "libs/python{major}{minor}{abi_flags}.lib",
+    shared_library = "python{major}{minor}{abi_flags}.dll",
+)
+""".format(
+            abi_flags = abi_flags,
+            major = major,
+            minor = minor,
+        )
+        libpython_target = """\
+alias(
+    name = "libpython",
+    actual = ":interface",
+)
+"""
+        header_interface_deps = [":interface"]
+        if supports_abi3:
+            interface_targets += """
+cc_import(
+    name = "abi3_interface",
+    interface_library = "libs/python3{stable_abi_suffix}.lib",
+    shared_library = "python3{stable_abi_suffix}.dll",
+)
+""".format(stable_abi_suffix = stable_abi_suffix)
+            abi3_interface_deps = [":abi3_interface"]
+    elif "darwin" in platform:
+        libpython_srcs = [
+            "lib/libpython{}.{}{}.dylib".format(major, minor, abi_flags),
+        ]
+    else:
+        libpython_srcs = [
+            "lib/libpython{}.{}{}.so".format(major, minor, abi_flags),
+            "lib/libpython{}.{}{}.so.1.0".format(major, minor, abi_flags),
+        ]
+
+    if not is_windows:
+        libpython_target = """\
+cc_library(
+    name = "libpython",
+    srcs = {libpython_srcs},
+)
+""".format(libpython_srcs = repr(libpython_srcs))
+
+    abi3_header_target = ""
+    headers_abi3_attr = ""
+    if supports_abi3:
+        abi3_header_target = """\
+cc_library(
+    name = "python_headers_abi3",
+    hdrs = [":includes"],
+    includes = {include_dirs},
+    deps = {abi3_interface_deps},
+)
+""".format(
+            abi3_interface_deps = repr(abi3_interface_deps),
+            include_dirs = repr(include_dirs),
+        )
+        headers_abi3_attr = "    headers_abi3 = \":python_headers_abi3\",\n"
 
     if is_windows:
         core_include = '["**/*.py", "**/*.pyd", "**/*.dll", "**/*.exe", "include/**", "Lib/**"]'
@@ -127,9 +217,12 @@ def _build_file_content(python_bin, is_windows, version_info):
 """.format(feature = feature_name)
 
     return """\
+load("@rules_cc//cc:cc_import.bzl", "cc_import")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_python//python:py_runtime.bzl", "py_runtime")
 load("@rules_python//python:py_runtime_pair.bzl", "py_runtime_pair")
 load("@rules_python//python:py_exec_tools_toolchain.bzl", "py_exec_tools_toolchain")
+load("@rules_python//python/cc:py_cc_toolchain.bzl", "py_cc_toolchain")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -153,7 +246,21 @@ filegroup(
 {feature_selects}    ,
 )
 
-py_runtime(
+# --- Python C toolchain ---
+
+{interface_targets}filegroup(
+    name = "includes",
+    srcs = glob(["include/**/*.h"], allow_empty = False),
+)
+
+{abi3_header_target}cc_library(
+    name = "python_headers",
+    hdrs = [":includes"],
+    includes = {include_dirs},
+    deps = {header_interface_deps},
+)
+
+{libpython_target}py_runtime(
     name = "py3_runtime",
     files = [":files"],
     interpreter = "{python_bin}",
@@ -174,7 +281,20 @@ py_runtime_pair(
 py_exec_tools_toolchain(
     name = "exec_tools_toolchain",
 )
+
+py_cc_toolchain(
+    name = "py_cc_toolchain",
+    headers = ":python_headers",
+{headers_abi3_attr}    libs = ":libpython",
+    python_version = "{major}.{minor}",
+)
 """.format(
+        abi3_header_target = abi3_header_target,
+        header_interface_deps = repr(header_interface_deps),
+        headers_abi3_attr = headers_abi3_attr,
+        include_dirs = repr(include_dirs),
+        interface_targets = interface_targets,
+        libpython_target = libpython_target,
         python_bin = python_bin,
         major = major,
         minor = minor,
@@ -189,7 +309,7 @@ py_exec_tools_toolchain(
 python_interpreter = repository_rule(
     implementation = _python_interpreter_impl,
     attrs = {
-        "freethreaded": attr.bool(default = False),
+        "abi_flags": attr.string(mandatory = True),
         "platform": attr.string(mandatory = True),
         "python_version": attr.string(default = ""),
         "sha256": attr.string(default = ""),
@@ -330,6 +450,17 @@ toolchain(
     target_settings = {target_settings},
     toolchain = "@{repo}//:runtime_pair",
     toolchain_type = "@bazel_tools//tools/python:toolchain_type",
+)
+
+# Bazel resolves runtime and C toolchains independently, so give both the same
+# target settings to keep native extensions on the selected PBS archive:
+# https://github.com/aspect-build/rules_py/issues/1095
+toolchain(
+    name = "{name}_py_cc",
+    target_compatible_with = {target_compatible_with},
+    target_settings = {target_settings},
+    toolchain = "@{repo}//:py_cc_toolchain",
+    toolchain_type = "@rules_python//python/cc:toolchain_type",
 )
 """.format(
             name = info["name"],

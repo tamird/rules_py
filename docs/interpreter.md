@@ -21,6 +21,11 @@ older release date that includes it.
 box, including Windows (x86_64, aarch64, i686), Linux (glibc and musl), and
 macOS.
 
+**Native extension support.** Each PBS runtime is paired with a
+`rules_python` C toolchain that exposes the matching Python headers and link
+libraries. Stable-ABI headers are exposed only when the selected PBS archive
+supports that ABI.
+
 ## Quickstart
 
 ```starlark
