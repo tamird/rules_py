@@ -243,7 +243,12 @@ uv.override_package(
   file-or-directory kind and regular-versus-namespace classification. Patched
   wheels retain whole-wheel import fallback while that original topology
   participates in analysis. Added paths are not visible during analysis; do
-  not add paths that collide with another wheel.
+  not add paths that collide with another wheel. Original root `.pth` files
+  execute through the fallback rather than through projected copies. An
+  original root `.pth` collision is rejected because whole-wheel fallback
+  cannot suppress the losing file. The fallback also owns original
+  `*.dist-info` and `*.egg-info` entries, so metadata scanners observe each
+  distribution once.
 - Console-script declarations are extracted before post-install patches run.
   Do not use post-install patches to modify `[console_scripts]` in
   `.dist-info/entry_points.txt`; generated wrappers continue to reflect the

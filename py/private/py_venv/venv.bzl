@@ -26,7 +26,8 @@ distutils, etc.) treat it as a real venv:
         <ns_pkg>/<entry>                        merged PEP 420 namespace: real
                                                 <ns_pkg>/ dir, per-entry symlinks
                                                 into each contributing wheel
-        <dist>-<ver>.dist-info                  symlink to a wheel's dist-info
+        <dist>-<ver>.dist-info                  symlink when the wheel needs no
+                                                whole-wheel fallback
 
 The whole tree is declared at analysis time as individual
 `ctx.actions.declare_file` / `ctx.actions.declare_symlink` outputs so
@@ -58,7 +59,7 @@ def _dict_to_exports(env):
 def _resolve_wheel_collisions(ctx, wheels, package_collisions):
     """Walk PyWheelsInfo.wheels and produce merge plans for site-packages + bin/.
 
-    Two kinds of collision get checked:
+    Three kinds of collision get checked:
 
     * **Top-level in site-packages.** Multiple wheels claiming the same
       top-level name. When ALL contributing wheels flag the name as a
@@ -88,17 +89,23 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
       caller physically merges those subtrees (what a flat
       `pip install` would have produced).
 
+    * **Distribution metadata in site-packages.** Metadata discovery scans
+      every `sys.path` entry instead of stopping at the first match. Project
+      `*.dist-info` and `*.egg-info` only for wheels that need no whole-wheel
+      fallback, and reject duplicate metadata entries because fallback cannot
+      suppress a losing claimant.
+
     * **Console-script name in bin/.** Apply `package_collisions` directly
       — no namespace equivalent.
 
     Returns:
       top_level_to_site_pkgs: dict {site_packages_relative_path: site_packages_rfpath}
-          — keys are top-level names, plus `/`-joined deeper paths (e.g.
-          `jaraco/functools`) for merged namespace packages.
+          — keys are import roots, `/`-joined deeper paths (e.g.
+          `jaraco/functools`) for merged namespace packages, and distribution
+          metadata entries owned by fully covered wheels.
       fully_covered_site_pkgs: dict[str, True] — site-packages paths whose
-          declared top-levels ALL ended up claimed by them (directly or
-          via a complete namespace merge) — safe to drop from the .pth
-          fallback.
+          declared import roots ALL ended up claimed by them (directly or via
+          a complete namespace merge) — safe to drop from the .pth fallback.
       console_scripts_map: dict {script_name: struct(module, func)} after
           collision resolution.
       merge_groups: list of struct(root, site_packages_list) — regular
@@ -121,8 +128,10 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
             # buildifier: disable=print
             print(msg)
 
-    # Pass 1: bucket claimants per top-level / per console-script name.
+    # Pass 1: bucket claimants per import root, distribution metadata entry,
+    # and console-script name.
     tl_claimants = {}  # tl -> list of struct(site_packages, is_ns, ns_entries)
+    metadata_owners = {}  # metadata entry -> site_packages path
     cs_claimants = {}  # name -> list of struct(site_packages, module, func)
     wheel_by_sp = {}  # site_packages_rfpath -> wheel struct
     for w in wheels:
@@ -132,8 +141,23 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
         for entry in getattr(w, "namespace_entries", ()):
             ns_entries_by_tl.setdefault(entry.split("/")[0], []).append(entry)
         for tl in w.top_levels:
+            if tl.endswith(".dist-info") or tl.endswith(".egg-info"):
+                # Metadata discovery aggregates every sys.path entry instead
+                # of stopping at the first match. Whole-wheel fallback cannot
+                # suppress one of two distinct owners.
+                prior = metadata_owners.get(tl)
+                if prior != None and prior != w.site_packages_rfpath:
+                    fail("{}: distribution metadata entry `{}` is provided by both {} and {}; whole-wheel fallback cannot suppress a losing claimant.".format(
+                        ctx.label,
+                        tl,
+                        prior,
+                        w.site_packages_rfpath,
+                    ))
+                metadata_owners[tl] = w.site_packages_rfpath
+                continue
             tl_claimants.setdefault(tl, []).append(struct(
                 site_packages = w.site_packages_rfpath,
+                layout_complete = w.layout_complete,
                 is_ns = tl in ns_set,
                 ns_entries = tuple(ns_entries_by_tl.get(tl, [])),
             ))
@@ -167,9 +191,20 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
     ns_claimant_sps = {}  # sp -> True, wheels in any all-namespace collision
     for tl, claimants in tl_claimants.items():
         distinct_sp = {c.site_packages: c for c in claimants}
+        processed_pth = tl.endswith(".pth") and not tl.startswith(".")
         if len(distinct_sp) == 1:
-            top_level_to_site_pkgs[tl] = claimants[0].site_packages
+            claimant = claimants[0]
+            if not processed_pth or claimant.layout_complete:
+                top_level_to_site_pkgs[tl] = claimant.site_packages
             continue
+
+        if processed_pth and any([
+            not c.layout_complete
+            for c in distinct_sp.values()
+        ]):
+            fail(("{}: root `.pth` file `{}` collides across wheels, but an " +
+                  "incomplete wheel layout requires whole-wheel fallback that " +
+                  "would execute every claimant.").format(ctx.label, tl))
 
         all_namespace = all([c.is_ns for c in claimants])
         if all_namespace:
@@ -391,6 +426,8 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
         ns_covered = ns_covered_per_wheel.get(w.site_packages_rfpath, {})
         covered = True
         for tl in w.top_levels:
+            if tl in metadata_owners:
+                continue
             if tl in skipped:
                 covered = False
                 break
@@ -399,6 +436,13 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
                 break
         if covered:
             fully_covered[w.site_packages_rfpath] = True
+
+    # A wheel retained on fallback already exposes its metadata through that
+    # sys.path entry. Project metadata only for wheels whose fallback is gone,
+    # so importlib.metadata observes each distribution exactly once.
+    for tl, site_packages in metadata_owners.items():
+        if site_packages in fully_covered:
+            top_level_to_site_pkgs[tl] = site_packages
 
     return top_level_to_site_pkgs, fully_covered, console_scripts_map, merge_groups
 
@@ -532,6 +576,9 @@ def assemble_venv(
     # rules_python pip wheels (both stage content at their rfpath).
     # `/`-joined top-levels (merged namespace packages, e.g.
     # `jaraco/functools`) need one extra `..` per segment.
+    # Collision planning omits observed root `.pth` files from incomplete
+    # layouts so whole-wheel fallback is their only runtime owner and can also
+    # discover added `.pth` files.
     for tl, wheel_site_pkgs in top_level_to_site_pkgs.items():
         out = ctx.actions.declare_symlink("{}/{}".format(site_packages_rel, tl))
         extra_up = "../" * tl.count("/")

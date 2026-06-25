@@ -17,8 +17,15 @@ site="$1/lib/python$2.$3/site-packages"
 mkdir -p "$site/collision_namespace"
 printf 'VALUE = %s\n' "$4" > "$site/collision_namespace/shared.py"
 printf 'VALUE = %s\n\ndef main():\n    print(VALUE)\n' "$4" > "$site/collision_namespace/$5.py"
+metadata="$site/$7"
+mkdir -p "$metadata"
+printf 'Metadata-Version: 2.1\nName: collision-%s\nVersion: 1.0\n' "$5" > "$metadata/METADATA"
 """
-    top_levels = ("collision_namespace",)
+    metadata_name = ctx.attr.metadata_name or "collision_{}-1.0.dist-info".format(ctx.attr.value)
+    top_levels = (
+        "collision_namespace",
+        metadata_name,
+    )
     console_scripts = ()
     if ctx.attr.ordinary:
         command += """
@@ -26,6 +33,11 @@ printf 'VALUE = %s\n' "$4" > "$site/collision_order.py"
 """
         top_levels += ("collision_order.py",)
         console_scripts = ("collision-order=collision_namespace.{}:main".format(ctx.attr.value),)
+    if ctx.attr.root_pth_name:
+        command += """
+printf 'import sys; sys.path.append("rules_py_pth_%s")\n' "$5" > "$site/$6.pth"
+"""
+        top_levels += (ctx.attr.root_pth_name + ".pth",)
     ctx.actions.run_shell(
         outputs = [install_tree],
         command = command,
@@ -35,6 +47,8 @@ printf 'VALUE = %s\n' "$4" > "$site/collision_order.py"
             str(minor),
             json.encode(ctx.attr.value),
             ctx.attr.value,
+            ctx.attr.root_pth_name,
+            metadata_name,
         ],
     )
     site_packages = "/".join([
@@ -79,7 +93,9 @@ _wheel = rule(
     implementation = _wheel_impl,
     attrs = {
         "layout_complete": attr.bool(default = True),
+        "metadata_name": attr.string(),
         "ordinary": attr.bool(),
+        "root_pth_name": attr.string(),
         "value": attr.string(mandatory = True),
     },
     toolchains = [PY_TOOLCHAIN],
@@ -87,11 +103,14 @@ _wheel = rule(
 
 def _collision_error_test_impl(ctx):
     env = analysistest.begin(ctx)
-    asserts.expect_failure(env, "namespace entry `collision_namespace/shared.py`")
+    asserts.expect_failure(env, ctx.attr.expected_error)
     return analysistest.end(env)
 
 _collision_error_test = analysistest.make(
     _collision_error_test_impl,
+    attrs = {
+        "expected_error": attr.string(mandatory = True),
+    },
     expect_failure = True,
 )
 
@@ -148,7 +167,31 @@ def collision_order_test_suite():
     )
     _collision_error_test(
         name = "collision_error_test",
+        expected_error = "namespace entry `collision_namespace/shared.py`",
         target_under_test = ":_collision_error_binary",
+    )
+
+    _wheel(
+        name = "_metadata_collision_second",
+        metadata_name = "collision_first-1.0.dist-info",
+        tags = ["manual"],
+        value = "metadata_second",
+    )
+    py_binary(
+        name = "_metadata_collision_error_binary",
+        srcs = ["test_namespace_fallback.py"],
+        main = "test_namespace_fallback.py",
+        package_collisions = "ignore",
+        tags = ["manual"],
+        deps = [
+            ":_collision_first",
+            ":_metadata_collision_second",
+        ],
+    )
+    _collision_error_test(
+        name = "metadata_collision_error_test",
+        expected_error = "distribution metadata entry `collision_first-1.0.dist-info` is provided by both",
+        target_under_test = ":_metadata_collision_error_binary",
     )
 
     _wheel(
@@ -171,7 +214,57 @@ def collision_order_test_suite():
     )
     _collision_error_test(
         name = "incomplete_collision_error_test",
+        expected_error = "namespace entry `collision_namespace/shared.py`",
         target_under_test = ":_incomplete_collision_error_binary",
+    )
+
+    _wheel(
+        name = "_pth_collision_complete",
+        root_pth_name = "collision_marker",
+        tags = ["manual"],
+        value = "complete",
+    )
+    _wheel(
+        name = "_pth_collision_incomplete",
+        layout_complete = False,
+        root_pth_name = "collision_marker",
+        tags = ["manual"],
+        value = "pth_incomplete",
+    )
+    py_binary(
+        name = "_incomplete_pth_collision_error_binary",
+        srcs = ["test_namespace_fallback.py"],
+        main = "test_namespace_fallback.py",
+        package_collisions = "ignore",
+        tags = ["manual"],
+        deps = [
+            ":_pth_collision_complete",
+            ":_pth_collision_incomplete",
+        ],
+    )
+    _collision_error_test(
+        name = "incomplete_pth_collision_error_test",
+        expected_error = "root `.pth` file `collision_marker.pth` collides",
+        target_under_test = ":_incomplete_pth_collision_error_binary",
+    )
+
+    _wheel(
+        name = "_pth_runtime_incomplete",
+        layout_complete = False,
+        root_pth_name = "incomplete_marker",
+        tags = ["manual"],
+        value = "incomplete",
+    )
+    py_test(
+        name = "incomplete_layout_pth_test",
+        srcs = ["test_incomplete_layout_pth.py"],
+        isolated = False,
+        main = "test_incomplete_layout_pth.py",
+        package_collisions = "ignore",
+        deps = [
+            ":_pth_collision_complete",
+            ":_pth_runtime_incomplete",
+        ],
     )
 
     _wheel(
