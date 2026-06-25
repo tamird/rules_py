@@ -15,7 +15,9 @@ uv.override_package(
         "//cases/uv-sdist-fallback:build_env_tool": "BUILD_ENV_TOOL",
     },
     build_tools = ["@bazel_tools//tools/jdk:current_java_runtime"],
+    console_scripts = {"cowsay": "cowsay.__main__:cli"},
     lock = "//cases/uv-sdist-fallback:uv.lock",
+    monitor_memory = True,
     path_env = {
         "JAVA": "$(JAVA)",
         "JAVA_HOME": "$(JAVABASE)",
@@ -31,12 +33,6 @@ uv.project(
     hub_name = "pypi_sdist_fallback",
     lock = "//cases/uv-sdist-fallback:uv.lock",
     pyproject = "//cases/uv-sdist-fallback:pyproject.toml",
-)
-uv.override_package(
-    name = "cowsay",
-    console_scripts = {"cowsay": "cowsay.__main__:cli"},
-    lock = "//cases/uv-sdist-fallback:uv.lock",
-    monitor_memory = True,
 )
 use_repo(
     uv,
