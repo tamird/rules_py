@@ -28,7 +28,7 @@ printf 'Metadata-Version: 2.1\nName: collision-%s\nVersion: 1.0\n' "$5" > "$meta
     )
     directory_top_levels = top_levels
     console_scripts = ()
-    if ctx.attr.ordinary_kind in ("directory", "untyped_directory"):
+    if ctx.attr.ordinary_kind == "directory":
         command += """
 mkdir -p "$site/collision_order"
 printf 'VALUE = %s\n' "$4" > "$site/collision_order/__init__.py"
@@ -36,7 +36,7 @@ printf 'VALUE = %s\n' "$4" > "$site/collision_order/shared.py"
 printf 'VALUE = %s\n' "$4" > "$site/collision_order/$5.py"
 """
         top_levels = ("collision_order",) + top_levels
-        directory_top_levels = top_levels if ctx.attr.ordinary_kind == "directory" else ()
+        directory_top_levels = top_levels
         console_scripts = ("collision-order=collision_namespace.{}:main".format(ctx.attr.value),)
     elif ctx.attr.ordinary_kind == "file":
         command += """
@@ -45,10 +45,19 @@ printf 'VALUE = %s\n' "$4" > "$site/collision_order"
         top_levels = ("collision_order",) + top_levels
         console_scripts = ("collision-order=collision_namespace.{}:main".format(ctx.attr.value),)
     if ctx.attr.root_pth_name:
-        command += """
+        if ctx.attr.root_pth_directory:
+            command += """
+mkdir -p "$site/$6.pth"
+printf '%s\n' "$5" > "$site/$6.pth/$5.txt"
+"""
+            directory_top_levels += (ctx.attr.root_pth_name + ".pth",)
+        else:
+            command += """
 printf 'import sys; sys.path.append("rules_py_pth_%s")\n' "$5" > "$site/$6.pth"
 """
         top_levels += (ctx.attr.root_pth_name + ".pth",)
+    if not ctx.attr.layout_typed:
+        directory_top_levels = ()
     ctx.actions.run_shell(
         outputs = [install_tree],
         command = command,
@@ -105,11 +114,13 @@ _wheel = rule(
     implementation = _wheel_impl,
     attrs = {
         "layout_complete": attr.bool(default = True),
+        "layout_typed": attr.bool(default = True),
         "metadata_name": attr.string(),
         "ordinary_kind": attr.string(
             mandatory = True,
-            values = ["directory", "file", "none", "untyped_directory"],
+            values = ["directory", "file", "none"],
         ),
+        "root_pth_directory": attr.bool(),
         "root_pth_name": attr.string(),
         "value": attr.string(mandatory = True),
     },
@@ -187,7 +198,8 @@ def collision_order_test_suite():
     )
     _wheel(
         name = "_collision_untyped",
-        ordinary_kind = "untyped_directory",
+        layout_typed = False,
+        ordinary_kind = "directory",
         value = "untyped",
         tags = ["manual"],
     )
@@ -303,6 +315,7 @@ def collision_order_test_suite():
     _wheel(
         name = "_pth_collision_incomplete",
         layout_complete = False,
+        layout_typed = False,
         ordinary_kind = "none",
         root_pth_name = "collision_marker",
         tags = ["manual"],
@@ -342,6 +355,34 @@ def collision_order_test_suite():
         deps = [
             ":_pth_collision_complete",
             ":_pth_runtime_incomplete",
+        ],
+    )
+
+    _wheel(
+        name = "_pth_directory_first",
+        ordinary_kind = "none",
+        root_pth_directory = True,
+        root_pth_name = "directory_marker",
+        tags = ["manual"],
+        value = "first",
+    )
+    _wheel(
+        name = "_pth_directory_second",
+        layout_complete = False,
+        ordinary_kind = "none",
+        root_pth_directory = True,
+        root_pth_name = "directory_marker",
+        tags = ["manual"],
+        value = "second",
+    )
+    py_test(
+        name = "pth_directory_overlay_test",
+        srcs = ["test_pth_directory_overlay.py"],
+        main = "test_pth_directory_overlay.py",
+        package_collisions = "ignore",
+        deps = [
+            ":_pth_directory_first",
+            ":_pth_directory_second",
         ],
     )
 
