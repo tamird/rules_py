@@ -12,7 +12,7 @@ bytecode_magic_test(
     name = "python_3_13_freethreaded",
     expected_magic_number = 3571,
     expected_python_version = "3.13",
-    runtime_pair = "@python_3_13_x86_64_unknown_linux_gnu_freethreaded_pgo_lto//:runtime_pair",
+    runtime_pair = "@python_3_13_x86_64_unknown_linux_gnu_freethreaded//:runtime_pair",
     tags = ["manual"],
 )
 
@@ -36,7 +36,7 @@ bytecode_magic_test(
     name = "python_3_14_freethreaded",
     expected_magic_number = 3627,
     expected_python_version = "3.14",
-    runtime_pair = "@python_3_14_x86_64_unknown_linux_gnu_freethreaded_pgo_lto//:runtime_pair",
+    runtime_pair = "@python_3_14_x86_64_unknown_linux_gnu_freethreaded//:runtime_pair",
     tags = ["manual"],
 )
 
