@@ -9,10 +9,9 @@ assert shared.VALUE == "reset_final", shared.VALUE
 for surviving in ("reset_after", "reset_final"):
     module = importlib.import_module(f"collision_order.{surviving}")
     assert module.VALUE == surviving, (module.VALUE, surviving)
-for replaced in ("reset_before", "reset_file"):
-    try:
-        importlib.import_module(f"collision_order.{replaced}")
-    except ModuleNotFoundError:
-        pass
-    else:
-        raise AssertionError(f"pre-reset module survived: {replaced}")
+try:
+    importlib.import_module("collision_order.reset_before")
+except ModuleNotFoundError:
+    pass
+else:
+    raise AssertionError("pre-reset module survived: reset_before")

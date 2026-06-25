@@ -339,6 +339,31 @@ def collision_order_test_suite():
     )
 
     _wheel(
+        name = "_pth_collision_incomplete_typed",
+        layout_complete = False,
+        ordinary_kind = "none",
+        root_pth_name = "collision_marker",
+        tags = ["manual"],
+        value = "pth_incomplete_typed",
+    )
+    py_binary(
+        name = "_typed_incomplete_pth_collision_error_binary",
+        srcs = ["test_namespace_fallback.py"],
+        main = "test_namespace_fallback.py",
+        package_collisions = "ignore",
+        tags = ["manual"],
+        deps = [
+            ":_pth_collision_complete",
+            ":_pth_collision_incomplete_typed",
+        ],
+    )
+    _collision_error_test(
+        name = "typed_incomplete_pth_collision_error_test",
+        expected_error = "root `.pth` file `collision_marker.pth` collides",
+        target_under_test = ":_typed_incomplete_pth_collision_error_binary",
+    )
+
+    _wheel(
         name = "_pth_runtime_incomplete",
         layout_complete = False,
         ordinary_kind = "none",

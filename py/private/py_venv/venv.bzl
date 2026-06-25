@@ -105,10 +105,10 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
       top_level_to_site_pkgs: dict {site_packages_relative_path: site_packages_rfpath}
           — keys are import roots, `/`-joined deeper paths (e.g.
           `jaraco/functools`) for merged namespace packages, and distribution
-          metadata entries owned by fully covered wheels.
-      fully_covered_site_pkgs: dict[str, True] — site-packages paths whose
-          declared import roots ALL ended up claimed by them (directly or via
-          a complete namespace merge) — safe to drop from the .pth fallback.
+          metadata entries owned by wheels without fallback.
+      fully_accounted_site_pkgs: dict[str, True] — site-packages paths whose
+          declared import roots are projected, merged, or deliberately
+          suppressed by overlay — safe to drop from the .pth fallback.
       console_scripts_map: dict {script_name: struct(module, func)} after
           collision resolution.
       merge_groups: list of struct(root, site_packages_list) — directories
@@ -188,13 +188,13 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
             ))
 
     # Pass 2: resolve top-levels. Track which (site_packages, tl) pairs
-    # we SKIPPED (left to the .pth fallback) and which namespace claims
-    # were fully COVERED by per-entry symlinks, so pass 3 can decide
-    # which wheels are fully covered.
+    # we SKIPPED (left to the .pth fallback) and which namespace claims are
+    # accounted for by per-entry symlinks, so pass 3 can decide whether every
+    # import root is accounted for.
     top_level_to_site_pkgs = {}
     skipped_per_wheel = {}
     ns_covered_per_wheel = {}
-    ordinary_covered_per_wheel = {}
+    ordinary_accounted_per_wheel = {}
     ordinary_merge_groups = []
     conflicted_roots = {}  # root path -> True (regular package spanning wheels)
     ns_claimant_sps = {}  # sp -> True, wheels in any all-namespace collision
@@ -400,7 +400,7 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
             prior = c
 
         for c in distinct_claimants:
-            ordinary_covered_per_wheel.setdefault(c.site_packages, {})[tl] = True
+            ordinary_accounted_per_wheel.setdefault(c.site_packages, {})[tl] = True
 
         trailing_directories = []
         for c in distinct_claimants:
@@ -470,38 +470,38 @@ def _resolve_wheel_collisions(ctx, wheels, package_collisions):
             seen[c.site_packages] = True
         console_scripts_map[name] = struct(module = winner.module, func = winner.func)
 
-    # Pass 3: complete wheel layouts fully covered by direct (or complete
-    # per-entry namespace) symlinks. Incomplete layouts retain their observed
-    # claims for collision and merge planning but always keep whole-wheel
-    # fallback.
-    fully_covered = {}
+    # Pass 3: complete wheel layouts whose import roots are all accounted for
+    # by projection, merge, or deliberate overlay suppression. Incomplete
+    # layouts retain their observed claims for collision and merge planning but
+    # always keep whole-wheel fallback.
+    fully_accounted = {}
     for w in wheels:
         if not w.layout_complete:
             continue
         skipped = skipped_per_wheel.get(w.site_packages_rfpath, {})
         ns_covered = ns_covered_per_wheel.get(w.site_packages_rfpath, {})
-        ordinary_covered = ordinary_covered_per_wheel.get(w.site_packages_rfpath, {})
-        covered = True
+        ordinary_accounted = ordinary_accounted_per_wheel.get(w.site_packages_rfpath, {})
+        accounted = True
         for tl in w.top_levels:
-            if tl in metadata_owners or tl in ordinary_covered:
+            if tl in metadata_owners or tl in ordinary_accounted:
                 continue
             if tl in skipped:
-                covered = False
+                accounted = False
                 break
             if top_level_to_site_pkgs.get(tl) != w.site_packages_rfpath and tl not in ns_covered:
-                covered = False
+                accounted = False
                 break
-        if covered:
-            fully_covered[w.site_packages_rfpath] = True
+        if accounted:
+            fully_accounted[w.site_packages_rfpath] = True
 
     # A wheel retained on fallback already exposes its metadata through that
     # sys.path entry. Project metadata only for wheels whose fallback is gone,
     # so importlib.metadata observes each distribution exactly once.
     for tl, site_packages in metadata_owners.items():
-        if site_packages in fully_covered:
+        if site_packages in fully_accounted:
             top_level_to_site_pkgs[tl] = site_packages
 
-    return top_level_to_site_pkgs, fully_covered, console_scripts_map, merge_groups
+    return top_level_to_site_pkgs, fully_accounted, console_scripts_map, merge_groups
 
 def assemble_venv(
         ctx,
@@ -561,7 +561,7 @@ def assemble_venv(
 
     wheels_depset = _py_library.make_wheels_depset(ctx)
     wheels = wheels_depset.to_list()
-    top_level_to_site_pkgs, fully_covered_site_pkgs, console_scripts_map, merge_groups = _resolve_wheel_collisions(
+    top_level_to_site_pkgs, fully_accounted_site_pkgs, console_scripts_map, merge_groups = _resolve_wheel_collisions(
         ctx,
         wheels,
         package_collisions,
@@ -722,7 +722,7 @@ def assemble_venv(
     # Known layouts use a plain path because their root `.pth` files were
     # already projected or deliberately suppressed by collision resolution.
     def _format_imp(imp):
-        if imp in fully_covered_site_pkgs:
+        if imp in fully_accounted_site_pkgs:
             return None
         if imp.endswith("site-packages"):
             if imp in known_layout_site_pkgs:
