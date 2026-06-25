@@ -13,6 +13,7 @@ load(
     # follows the consuming target's dep_group, so the group name is never
     # repeated in deps.
     "@pypi_requirements_by_dep_group//:defs.bzl",
+    "deps_for_group",
     multi_group_deps = "group_deps",
 )
 load(
@@ -31,6 +32,19 @@ load(
 # all_data_requirements == all_requirements (rules_python-compat alias);
 # referenced once so buildifier doesn't strip the load.
 _ALL_DATA_REQUIREMENTS_COUNT = len(all_data_requirements)
+
+_EXPLICIT_DEMO_DEPS = deps_for_group("requirements-bzl-demo")
+
+_EXPECTED_EXPLICIT_DEMO_DEPS = [
+    "@@aspect_rules_py++uv+pypi_requirements_by_dep_group//cowsay:pkg",
+    "@@aspect_rules_py++uv+pypi_requirements_by_dep_group//python_dateutil:pkg",
+    "@@aspect_rules_py++uv+pypi_requirements_by_dep_group//requirements_bzl_demo:pkg",
+    "@@aspect_rules_py++uv+pypi_requirements_by_dep_group//six:pkg",
+]
+
+_EXPLICIT_DEMO_DEPS_CHECK = None if _EXPLICIT_DEMO_DEPS == _EXPECTED_EXPLICIT_DEMO_DEPS else fail(
+    "unexpected explicit demo dependencies: {}".format(_EXPLICIT_DEMO_DEPS),
+)
 
 # requirement(name) returns the :pkg alias.
 py_test(
@@ -115,24 +129,21 @@ py_test(
     deps = multi_group_deps(),
 )
 
-# group_deps(): the SAME function used under two different dep_group attrs must
-# resolve to each group's list, with the group name never repeated in deps.
-# demo -> cowsay (shared with group-b) + python-dateutil + six (exclusive to
-# demo). group-b's exclusive wcwidth must NOT appear here, or it is incompatible
-# under this dep_group and analysis fails.
+# deps_for_group(): macros can inspect one explicit group's dependencies before
+# target configuration. The demo group contains cowsay (shared with group-b),
+# python-dateutil, and six; group-b's exclusive wcwidth must not appear here.
 py_test(
-    name = "group_deps_demo_test",
+    name = "deps_for_group_demo_test",
     srcs = ["__multi_test__.py"],
     dep_group = "requirements-bzl-demo",
     main = "__multi_test__.py",
     python_version = "3.12",
-    deps = multi_group_deps(),
+    deps = _EXPLICIT_DEMO_DEPS,
 )
 
-# group-b -> cowsay (shared) + wcwidth (exclusive). Same function as above; if
-# the select did not track the active dep_group it would resolve to demo's
-# incompatible list and analysis would fail. Together these pin bidirectional
-# exclusion plus the shared-package overlap (cowsay in both groups' lists).
+# group-b -> cowsay (shared) + wcwidth (exclusive). group_deps() follows this
+# target's dep_group; resolving to demo's explicit list would be incompatible.
+# Together these pin bidirectional exclusion plus the shared-package overlap.
 py_test(
     name = "group_deps_group_b_test",
     srcs = ["__group_b_test__.py"],
