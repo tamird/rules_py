@@ -38,8 +38,12 @@ source_built_wheel = rule(
 )
 
 def _whl_install(ctx):
-    py_toolchain = ctx.toolchains[PY_TOOLCHAIN].py3_runtime
-    exec_runtime = ctx.toolchains[EXEC_TOOLS_TOOLCHAIN].exec_tools.exec_runtime
+    target_runtime_pair = ctx.toolchains[PY_TOOLCHAIN]
+    target_runtime = target_runtime_pair.py3_runtime
+    exec_tools = ctx.toolchains[EXEC_TOOLS_TOOLCHAIN].exec_tools
+    exec_runtime = exec_tools.exec_runtime
+    if exec_runtime == None:
+        fail("{} requires the exec-tools toolchain to provide exec_runtime".format(ctx.label))
 
     # Name the install tree after the target rather than a fixed "install"
     # so several whl_install targets can coexist in one package without
@@ -77,8 +81,8 @@ def _whl_install(ctx):
     arguments.add(unpack_script)
     arguments.add_all([install_dir], expand_directories = False, before_each = "--into")
     arguments.add_all([archive], expand_directories = False, before_each = "--wheel")
-    arguments.add("--python-version-major", py_toolchain.interpreter_version_info.major)
-    arguments.add("--python-version-minor", py_toolchain.interpreter_version_info.minor)
+    arguments.add("--python-version-major", target_runtime.interpreter_version_info.major)
+    arguments.add("--python-version-minor", target_runtime.interpreter_version_info.minor)
 
     transitive_inputs = [
         depset([archive, unpack_script, exec_runtime.interpreter]),
@@ -101,9 +105,51 @@ def _whl_install(ctx):
 
     # Optional .pyc pre-compilation (runs after patching).
     # Use the exec-configured interpreter from EXEC_TOOLS_TOOLCHAIN so cross-arch
-    # builds work (the target interpreter isn't runnable on the build host). This is
-    # safe because .pyc bytecode varies by Python version, not by architecture.
+    # builds work (the target interpreter isn't runnable on the build host).
     if ctx.attr.compile_pyc:
+        target_magic = getattr(target_runtime_pair, "pyc_magic_number", None)
+
+        # exec_runtime exposes only PyRuntimeInfo, while exec_interpreter keeps
+        # the runtime pair's ToolchainInfo fields:
+        # https://github.com/bazel-contrib/rules_python/blob/1.9.0/python/private/py_exec_tools_toolchain.bzl#L29-L44
+        # Read identity through exec_interpreter, but continue to execute with
+        # exec_runtime because rules_python documents the former as unsafe for
+        # remote execution:
+        # https://github.com/bazel-contrib/rules_python/blob/1.9.0/python/private/py_exec_tools_info.bzl#L19-L51
+        exec_interpreter = exec_tools.exec_interpreter
+        exec_runtime_pair = None
+        if exec_interpreter != None and platform_common.ToolchainInfo in exec_interpreter:
+            exec_runtime_pair = exec_interpreter[platform_common.ToolchainInfo]
+        exec_magic = getattr(exec_runtime_pair, "pyc_magic_number", None) if exec_runtime_pair != None else None
+
+        # CPython's cache tag includes its major and minor version, while the
+        # .pyc header carries the magic number:
+        # https://github.com/python/cpython/blob/v3.13.2/Python/sysmodule.c#L3272-L3276
+        target_identity = None
+        if target_magic != None:
+            target_identity = (
+                target_runtime.interpreter_version_info.major,
+                target_runtime.interpreter_version_info.minor,
+                target_magic,
+            )
+        exec_identity = None
+        if exec_magic != None:
+            exec_identity = (
+                exec_runtime.interpreter_version_info.major,
+                exec_runtime.interpreter_version_info.minor,
+                exec_magic,
+            )
+
+        # The target consumes the .pyc and owns its compatibility policy.
+        # Standard rules_python runtime pairs do not opt into strict checking:
+        # https://github.com/bazel-contrib/rules_python/blob/1.9.0/python/py_runtime_pair.bzl#L31-L41
+        if target_identity != None and target_identity != exec_identity:
+            fail("{} cannot compile .pyc files: pyc identity target={}, exec={}".format(
+                ctx.label,
+                target_identity,
+                exec_identity,
+            ))
+
         arguments.add("--compile-pyc")
         arguments.add("--pyc-invalidation-mode", ctx.attr.pyc_invalidation_mode)
         arguments.add("--python", exec_runtime.interpreter)
@@ -131,8 +177,8 @@ def _whl_install(ctx):
         for segment in [ctx.label.repo_name, ctx.label.package, ctx.label.name + ".install"]
         if segment
     ] + ["lib/python{}.{}/site-packages".format(
-        py_toolchain.interpreter_version_info.major,
-        py_toolchain.interpreter_version_info.minor,
+        target_runtime.interpreter_version_info.major,
+        target_runtime.interpreter_version_info.minor,
     )])
 
     providers = [

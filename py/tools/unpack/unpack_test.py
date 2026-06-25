@@ -1,4 +1,5 @@
 import hashlib
+import py_compile
 import shutil
 import subprocess
 import sys
@@ -85,6 +86,24 @@ def _run_unpack(
         capture_output=True,
         text=True,
     )
+
+
+def _import_probe_value(root: Path) -> str:
+    return subprocess.run(
+        [
+            sys.executable,
+            "-B",
+            "-c",
+            (
+                "import sys; sys.path.insert(0, sys.argv[1]); "
+                "import cache_tag_probe; print(cache_tag_probe.VALUE)"
+            ),
+            str(root),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
 
 
 def main() -> None:
@@ -218,6 +237,34 @@ else:
             )
             assert rejected.returncode != 0, rejected.stdout + rejected.stderr
             assert expected_error in rejected.stderr
+
+        # Import compatibility requires both the cache-tag filename and the
+        # magic header. This is why whl_install compares major/minor in addition
+        # to PYC_MAGIC_NUMBER before compiling with an execution interpreter.
+        probe = root / "cache_tag_probe.py"
+        probe.write_text("VALUE = 'bytecode'\n")
+        pyc = Path(
+            py_compile.compile(
+                str(probe),
+                doraise=True,
+                invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH,
+            )
+        )
+        probe.write_text("VALUE = 'source'\n")
+        assert _import_probe_value(root) == "bytecode"
+
+        cache_tag = sys.implementation.cache_tag
+        assert cache_tag is not None
+        wrong_tag_pyc = pyc.with_name(
+            pyc.name.replace(cache_tag, cache_tag + "-other")
+        )
+        pyc.rename(wrong_tag_pyc)
+        assert _import_probe_value(root) == "source"
+
+        wrong_tag_pyc.rename(pyc)
+        pyc_bytes = pyc.read_bytes()
+        pyc.write_bytes(b"\x00\x00\x00\x00" + pyc_bytes[4:])
+        assert _import_probe_value(root) == "source"
 
         # Wheels may retain source for older interpreters. Compatible modules
         # still compile, while the incompatible file remains diagnostic.
