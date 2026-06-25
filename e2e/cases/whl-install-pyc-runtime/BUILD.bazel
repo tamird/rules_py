@@ -1,0 +1,221 @@
+load("@aspect_rules_py//py/private/interpreter:pbs_runtime_pair.bzl", "pbs_runtime_pair")
+load("@aspect_rules_py//uv/private/whl_install:rule.bzl", "whl_install")
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("@rules_python//python:py_exec_tools_toolchain.bzl", "py_exec_tools_toolchain")
+load("@rules_python//python:py_runtime.bzl", "py_runtime")
+load("@rules_python//python:py_runtime_pair.bzl", "py_runtime_pair")
+
+_TARGET_VERSION = {
+    "major": "3",
+    "minor": "13",
+    "micro": "1",
+    "releaselevel": "final",
+    "serial": "0",
+}
+
+_EXEC_VERSION = {
+    "major": "3",
+    "minor": "13",
+    "micro": "2",
+    "releaselevel": "final",
+    "serial": "0",
+}
+
+_MISMATCHED_EXEC_VERSION = {
+    "major": "3",
+    "minor": "14",
+    "micro": "0",
+    "releaselevel": "final",
+    "serial": "0",
+}
+
+_TARGET_CONSTRAINTS = [
+    "@platforms//cpu:aarch64",
+    "@platforms//os:linux",
+]
+
+_EXEC_CONSTRAINTS = [
+    "@platforms//cpu:x86_64",
+    "@platforms//os:linux",
+]
+
+platform(
+    name = "target_platform",
+    constraint_values = _TARGET_CONSTRAINTS,
+)
+
+platform(
+    name = "exec_platform",
+    constraint_values = _EXEC_CONSTRAINTS,
+)
+
+# test.sh only analyzes these targets with cquery; the files satisfy rule
+# attributes but are never executed or unpacked.
+write_file(
+    name = "interpreter",
+    out = "python",
+    content = ["#!/usr/bin/env sh"],
+    is_executable = True,
+    tags = ["manual"],
+)
+
+write_file(
+    name = "wheel",
+    out = "demo-1.0-py3-none-any.whl",
+    tags = ["manual"],
+)
+
+py_runtime(
+    name = "target_runtime",
+    interpreter = ":interpreter",
+    interpreter_version_info = _TARGET_VERSION,
+    python_version = "PY3",
+    tags = ["manual"],
+)
+
+py_runtime(
+    name = "exec_runtime",
+    abi_flags = "t",
+    interpreter = ":interpreter",
+    interpreter_version_info = _EXEC_VERSION,
+    python_version = "PY3",
+    tags = ["manual"],
+)
+
+py_runtime(
+    name = "mismatched_exec_runtime",
+    interpreter = ":interpreter",
+    interpreter_version_info = _MISMATCHED_EXEC_VERSION,
+    python_version = "PY3",
+    tags = ["manual"],
+)
+
+py_runtime_pair(
+    name = "ordinary_target_runtime_pair",
+    py3_runtime = ":target_runtime",
+    tags = ["manual"],
+)
+
+py_runtime_pair(
+    name = "ordinary_exec_runtime_pair",
+    py3_runtime = ":exec_runtime",
+    tags = ["manual"],
+)
+
+pbs_runtime_pair(
+    name = "target_runtime_pair",
+    py3_runtime = ":target_runtime",
+    pyc_magic_number = 3571,
+    tags = ["manual"],
+)
+
+pbs_runtime_pair(
+    name = "exec_runtime_pair",
+    py3_runtime = ":exec_runtime",
+    pyc_magic_number = 3571,
+    tags = ["manual"],
+)
+
+pbs_runtime_pair(
+    name = "mismatched_exec_runtime_pair",
+    py3_runtime = ":mismatched_exec_runtime",
+    pyc_magic_number = 3627,
+    tags = ["manual"],
+)
+
+pbs_runtime_pair(
+    name = "magic_mismatched_exec_runtime_pair",
+    py3_runtime = ":exec_runtime",
+    pyc_magic_number = 3627,
+    tags = ["manual"],
+)
+
+pbs_runtime_pair(
+    name = "version_mismatched_exec_runtime_pair",
+    py3_runtime = ":mismatched_exec_runtime",
+    pyc_magic_number = 3571,
+    tags = ["manual"],
+)
+
+py_exec_tools_toolchain(
+    name = "exec_tools",
+    tags = ["manual"],
+)
+
+toolchain(
+    name = "target_runtime_toolchain",
+    tags = ["manual"],
+    target_compatible_with = _TARGET_CONSTRAINTS,
+    toolchain = ":target_runtime_pair",
+    toolchain_type = "@bazel_tools//tools/python:toolchain_type",
+)
+
+toolchain(
+    name = "ordinary_target_runtime_toolchain",
+    tags = ["manual"],
+    target_compatible_with = _TARGET_CONSTRAINTS,
+    toolchain = ":ordinary_target_runtime_pair",
+    toolchain_type = "@bazel_tools//tools/python:toolchain_type",
+)
+
+toolchain(
+    name = "exec_runtime_toolchain",
+    tags = ["manual"],
+    target_compatible_with = _EXEC_CONSTRAINTS,
+    toolchain = ":exec_runtime_pair",
+    toolchain_type = "@bazel_tools//tools/python:toolchain_type",
+)
+
+toolchain(
+    name = "mismatched_exec_runtime_toolchain",
+    tags = ["manual"],
+    target_compatible_with = _EXEC_CONSTRAINTS,
+    toolchain = ":mismatched_exec_runtime_pair",
+    toolchain_type = "@bazel_tools//tools/python:toolchain_type",
+)
+
+toolchain(
+    name = "magic_mismatched_exec_runtime_toolchain",
+    tags = ["manual"],
+    target_compatible_with = _EXEC_CONSTRAINTS,
+    toolchain = ":magic_mismatched_exec_runtime_pair",
+    toolchain_type = "@bazel_tools//tools/python:toolchain_type",
+)
+
+toolchain(
+    name = "version_mismatched_exec_runtime_toolchain",
+    tags = ["manual"],
+    target_compatible_with = _EXEC_CONSTRAINTS,
+    toolchain = ":version_mismatched_exec_runtime_pair",
+    toolchain_type = "@bazel_tools//tools/python:toolchain_type",
+)
+
+toolchain(
+    name = "ordinary_exec_runtime_toolchain",
+    tags = ["manual"],
+    target_compatible_with = _EXEC_CONSTRAINTS,
+    toolchain = ":ordinary_exec_runtime_pair",
+    toolchain_type = "@bazel_tools//tools/python:toolchain_type",
+)
+
+toolchain(
+    name = "exec_tools_toolchain",
+    exec_compatible_with = _EXEC_CONSTRAINTS,
+    tags = ["manual"],
+    toolchain = ":exec_tools",
+    toolchain_type = "@rules_python//python:exec_tools_toolchain_type",
+)
+
+whl_install(
+    name = "fixture",
+    src = ":wheel",
+    compile_pyc = True,
+    tags = ["manual"],
+)
+
+whl_install(
+    name = "fixture_without_precompilation",
+    src = ":wheel",
+    compile_pyc = False,
+    tags = ["manual"],
+)
