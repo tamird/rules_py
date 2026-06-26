@@ -6,36 +6,26 @@ load(":action_probe.bzl", "pbs_action_probe")
 pbs_action_probe(
     name = "action_probe_39",
     python_version = "3.9",
-    test_children = False,
-    test_venv = False,
 )
 
 pbs_action_probe(
     name = "action_probe_310",
     python_version = "3.10",
-    test_children = False,
-    test_venv = False,
 )
 
 pbs_action_probe(
     name = "action_probe_311",
     python_version = "3.11",
-    test_children = True,
-    test_venv = False,
 )
 
 pbs_action_probe(
     name = "action_probe_312",
     python_version = "3.12",
-    test_children = True,
-    test_venv = True,
 )
 
 pbs_action_probe(
     name = "action_probe_313",
     python_version = "3.13",
-    test_children = False,
-    test_venv = False,
 )
 
 build_test(
