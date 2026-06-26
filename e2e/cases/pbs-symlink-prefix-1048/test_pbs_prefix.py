@@ -1,48 +1,80 @@
-"""Regression test for issue #1048: PBS symlink chain breaks sys.base_prefix.
+"""Exercise a PBS-backed venv from a Bazel action working directory."""
 
-Python 3.11/3.12 reimplemented prefix discovery in pure Python (getpath.py).
-Its resolvedpath() has a bug with multi-hop relative symlinks that traverse
-.. components across repo boundaries — the exact shape of the venv's
-bin/python → ../../../../interpreter_repo/bin/python3.11 chain.
-
-When resolution fails, Python falls back to the compiled-in /install prefix
-(absent at runtime), causing:
-    ModuleNotFoundError: No module named 'encodings'
-
-The fix: pyvenv.cfg's home= key now points directly to the PBS bin/ directory,
-so Python only resolves the local python → python3.11 symlink (one hop).
-"""
-
+import argparse
 import os
+import subprocess
 import sys
 
-from verify_venv import verify_all, verify_base_prefix, verify_in_venv
-
-
-def test_base_prefix_not_install():
-    assert sys.base_prefix != "/install", (
-        f"sys.base_prefix is '/install' (the PBS compile-time prefix). "
-        f"Python {sys.version_info.major}.{sys.version_info.minor} failed to "
-        f"resolve the pyvenv.cfg home= symlink chain."
+def _verify_prefixes(expected_cwd: str) -> None:
+    assert os.path.samefile(os.getcwd(), expected_cwd), (os.getcwd(), expected_cwd)
+    assert os.path.samefile(os.environ["PWD"], expected_cwd), (
+        os.environ["PWD"],
+        expected_cwd,
     )
+    assert os.path.isabs(sys.base_prefix), sys.base_prefix
+    assert os.path.isdir(sys.base_prefix), sys.base_prefix
+    assert sys.base_prefix != "/install", sys.path
+    assert os.path.isabs(sys.base_exec_prefix), sys.base_exec_prefix
+    assert os.path.isdir(sys.base_exec_prefix), sys.base_exec_prefix
+    assert sys.base_exec_prefix != "/install", sys.path
+    assert os.path.isabs(sys.executable), sys.executable
+    assert os.path.isfile(sys.executable), sys.executable
+    assert os.path.isabs(sys._base_executable), sys._base_executable
+    assert os.path.isfile(sys._base_executable), sys._base_executable
 
+    pyvenv_cfg = os.path.join(os.path.dirname(sys.executable), "..", "pyvenv.cfg")
+    with open(pyvenv_cfg, encoding="utf-8") as cfg:
+        config = cfg.read()
+    home = None
+    for line in config.splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key.strip().lower() == "home":
+            home = value.strip()
+            break
+    assert home is not None, config
 
-def test_base_prefix_has_stdlib():
+    expect_empty_home = os.name != "nt" and sys.version_info[:2] in {
+        (3, 11),
+        (3, 12),
+    }
+    assert (home == "") == expect_empty_home, (home, sys.version_info)
+
+    if not sys.flags.no_site:
+        assert os.path.isabs(sys.prefix), sys.prefix
+        assert os.path.isdir(sys.prefix), sys.prefix
+        assert sys.prefix != sys.base_prefix, (sys.prefix, sys.base_prefix)
+
     stdlib = os.path.join(
         sys.base_prefix,
         "lib",
         f"python{sys.version_info.major}.{sys.version_info.minor}",
     )
-    assert os.path.isdir(stdlib), (
-        f"stdlib missing: {stdlib!r} (sys.base_prefix={sys.base_prefix!r})"
+    assert os.path.isdir(stdlib), (stdlib, sys.path)
+
+    import _ctypes  # noqa: F401
+
+
+def _verify_child(options: list[str], expected_cwd: str) -> None:
+    subprocess.run(
+        [
+            sys.executable,
+            *options,
+            __file__,
+            "--expected-cwd",
+            expected_cwd,
+        ],
+        check=True,
     )
 
 
 if __name__ == "__main__":
-    verify_all()
-    test_base_prefix_not_install()
-    test_base_prefix_has_stdlib()
-    print(
-        f"OK: sys.base_prefix={sys.base_prefix!r}, "
-        f"Python {sys.version_info.major}.{sys.version_info.minor}"
-    )
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--expected-cwd", required=True)
+    parser.add_argument("--test-children", action="store_true")
+    args = parser.parse_args()
+
+    _verify_prefixes(args.expected_cwd)
+    if args.test_children:
+        _verify_child([], args.expected_cwd)
+        _verify_child(["-S"], args.expected_cwd)
+        _verify_child(["-BS"], args.expected_cwd)
