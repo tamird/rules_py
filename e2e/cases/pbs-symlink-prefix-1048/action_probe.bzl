@@ -2,12 +2,12 @@
 
 load("@aspect_rules_py//py:defs.bzl", "py_binary")
 
-def pbs_action_probe(name, python_version, test_children, test_venv):
+def pbs_action_probe(name, python_version):
     """Run a PBS-backed binary from a non-runfiles action cwd."""
     py_binary(
         name = name,
         srcs = ["test_pbs_prefix.py"],
-        expose_venv = test_venv,
+        expose_venv = True,
         main = "test_pbs_prefix.py",
         python_version = python_version,
     )
@@ -16,30 +16,25 @@ def pbs_action_probe(name, python_version, test_children, test_venv):
         "root=$$(pwd)",
         "mkdir -p $(@D)/cwd",
         "cd $(@D)/cwd",
-        "\"$$root/$(execpath :{name})\" --expected-cwd \"$$PWD\" {children}".format(
-            children = "--test-children" if test_children else "",
-            name = name,
-        ),
+        (
+            "\"$$root/$(execpath :{name})\" " +
+            "--expected-cwd \"$$PWD\" --test-children"
+        ).format(name = name),
+        (
+            "\"$$root/$(execpath :{name}.venv)\" " +
+            "\"$$root/$(location test_pbs_prefix.py)\" " +
+            "--expected-cwd \"$$PWD\""
+        ).format(name = name),
+        "touch \"$$root/$@\"",
     ]
-    tools = [":" + name]
-    srcs = []
 
-    if test_venv:
-        commands.append(
-            (
-                "\"$$root/$(execpath :{name}.venv)\" " +
-                "\"$$root/$(location test_pbs_prefix.py)\" " +
-                "--expected-cwd \"$$PWD\""
-            ).format(name = name),
-        )
-        tools.append(":" + name + ".venv")
-        srcs.append("test_pbs_prefix.py")
-
-    commands.append("touch \"$$root/$@\"")
     native.genrule(
         name = name + "_output",
-        srcs = srcs,
+        srcs = ["test_pbs_prefix.py"],
         outs = [name + ".stamp"],
         cmd = "\n".join(commands),
-        tools = tools,
+        tools = [
+            ":" + name,
+            ":" + name + ".venv",
+        ],
     )
