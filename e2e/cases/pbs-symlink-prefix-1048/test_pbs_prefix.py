@@ -30,6 +30,7 @@ def _verify_prefixes(expected_cwd: str) -> None:
         key, separator, value = line.partition("=")
         assert separator and key.strip() and value.strip(), line
         config_values[key.strip().lower()] = value.strip()
+    assert config_values["relocatable"] == "true", config_values
     home = config_values.get("home")
 
     expect_missing_home = os.name != "nt" and sys.version_info[:2] in {

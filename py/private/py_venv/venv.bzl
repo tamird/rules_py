@@ -6,9 +6,14 @@ venv, unless `expose_venv = True` routes them to a sibling py_venv) and
 the standalone `py_venv` rule call `assemble_venv` to keep their layouts
 bit-identical.
 
-The venv shape mirrors what CPython's `python -m venv` + pip install
-produces, so downstream tools (IDEs, `$VIRTUAL_ENV`-aware shells,
-distutils, etc.) treat it as a real venv:
+The runtime layout mirrors what CPython's `python -m venv` + pip install
+produces, so runtime consumers (`$VIRTUAL_ENV`-aware shells, distutils,
+etc.) treat it as a real venv. `pyvenv.cfg` also carries the rules_py
+`relocatable = true` extension. Separately, PBS-backed CPython 3.11/3.12
+build-time venvs intentionally omit the PEP 405 `home` key so CPython
+derives its base prefix from the relocatable `bin/python` symlink instead
+of resolving a relative path from the startup cwd. Strict PEP 405 metadata
+consumers need an adapter for that rules_py-specific shape.
 
     <venv_name>/
       pyvenv.cfg
@@ -707,9 +712,10 @@ def assemble_venv(
     )
     declared.append(site_packages_pth_file)
 
-    # CPython 3.11/3.12 resolve a relative `home` from the startup cwd. For an
-    # in-build runtime that supports build-time venvs, omit the key so getpath
-    # can derive the base from the relocatable bin/python symlink below:
+    # `relocatable = true` below is a rules_py extension: for an in-build
+    # CPython 3.11/3.12 runtime that supports build-time venvs, omit `home`
+    # so getpath derives the base from the relocatable bin/python symlink.
+    # A relative `home` instead resolves from the startup cwd:
     # https://github.com/python/cpython/blob/3bb231a6/Modules/getpath.py#L362-L365
     # https://github.com/python/cpython/blob/3bb231a6/Modules/getpath.py#L431-L432
     # Direct runtimes use that symlink. The capability also permits wrappers
