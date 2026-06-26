@@ -25,19 +25,18 @@ def _verify_prefixes(expected_cwd: str) -> None:
     pyvenv_cfg = os.path.join(os.path.dirname(sys.executable), "..", "pyvenv.cfg")
     with open(pyvenv_cfg, encoding="utf-8") as cfg:
         config = cfg.read()
-    home = None
+    config_values = {}
     for line in config.splitlines():
         key, separator, value = line.partition("=")
-        if separator and key.strip().lower() == "home":
-            home = value.strip()
-            break
-    assert home is not None, config
+        assert separator and key.strip() and value.strip(), line
+        config_values[key.strip().lower()] = value.strip()
+    home = config_values.get("home")
 
-    expect_empty_home = os.name != "nt" and sys.version_info[:2] in {
+    expect_missing_home = os.name != "nt" and sys.version_info[:2] in {
         (3, 11),
         (3, 12),
     }
-    assert (home == "") == expect_empty_home, (home, sys.version_info)
+    assert (home is None) == expect_missing_home, (home, sys.version_info)
 
     if not sys.flags.no_site:
         assert os.path.isabs(sys.prefix), sys.prefix
