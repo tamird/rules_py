@@ -251,6 +251,7 @@ py_runtime(
     name = "py3_runtime",
     abi_flags = "{abi_flags}",
     files = [":files"],
+    implementation_name = "cpython",
     interpreter = "{python_bin}",
     interpreter_version_info = {{
         "major": "{major}",
