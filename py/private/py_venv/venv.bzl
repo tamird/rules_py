@@ -708,14 +708,14 @@ def assemble_venv(
     declared.append(site_packages_pth_file)
 
     # CPython 3.11/3.12 resolve a relative `home` from the startup cwd. For an
-    # in-build runtime that supports build-time venvs, keep the key empty so
-    # getpath can derive the base from the relocatable bin/python symlink below:
+    # in-build runtime that supports build-time venvs, omit the key so getpath
+    # can derive the base from the relocatable bin/python symlink below:
     # https://github.com/python/cpython/blob/3bb231a6/Modules/getpath.py#L362-L365
     # https://github.com/python/cpython/blob/3bb231a6/Modules/getpath.py#L431-L432
     # Direct runtimes use that symlink. The capability also permits wrappers
     # that set PYTHONEXECUTABLE to preserve the underlying base executable:
     # https://github.com/bazel-contrib/rules_python/blob/bac54949/python/private/py_runtime_info.bzl#L316-L337
-    use_empty_venv_home = (
+    omit_venv_home = (
         py_toolchain.runfiles_interpreter and
         not is_windows and
         getattr(py_toolchain.toolchain, "implementation_name", None) == "cpython" and
@@ -723,8 +723,8 @@ def assemble_venv(
         py_toolchain.interpreter_version_info.major == 3 and
         py_toolchain.interpreter_version_info.minor in [11, 12]
     )
-    if use_empty_venv_home:
-        pyvenv_home = ""
+    if omit_venv_home:
+        pyvenv_home = None
     elif py_toolchain.runfiles_interpreter:
         pbs_rlocation = to_rlocation_path(ctx, py_toolchain.python)
         pbs_bin_dir = "/".join(pbs_rlocation.split("/")[:-1])
@@ -733,15 +733,15 @@ def assemble_venv(
         pyvenv_home = py_toolchain.python.path.rsplit("/", 1)[0]
 
     pyvenv_cfg = ctx.actions.declare_file("{}/pyvenv.cfg".format(venv_name))
+    home_line = "" if pyvenv_home == None else "home = {}\n".format(pyvenv_home)
     ctx.actions.write(
         output = pyvenv_cfg,
-        content = ("home = {home}\n" +
+        content = (home_line +
                    "implementation = CPython\n" +
                    "version_info = {major}.{minor}.{micro}\n" +
                    "include-system-site-packages = {include_system}\n" +
                    "aspect-include-user-site-packages = {include_user}\n" +
                    "relocatable = true\n").format(
-            home = pyvenv_home,
             major = py_toolchain.interpreter_version_info.major,
             minor = py_toolchain.interpreter_version_info.minor,
             micro = py_toolchain.interpreter_version_info.micro,
