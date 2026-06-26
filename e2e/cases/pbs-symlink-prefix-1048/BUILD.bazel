@@ -1,7 +1,7 @@
 """Regression tests for issue #1048."""
 
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
-load(":action_probe.bzl", "pbs_action_probe")
+load(":action_probe.bzl", "pbs_action_probe", "pbs_pyvenv_cfg_snapshot")
 
 pbs_action_probe(
     name = "action_probe_39",
@@ -26,6 +26,20 @@ pbs_action_probe(
 pbs_action_probe(
     name = "action_probe_313",
     python_version = "3.13",
+)
+
+# Snapshot one runtime on each side of the CPython 3.11/3.12 gate so a
+# generated-code diff shows the intentional missing 'home' line and the
+# unchanged retained-home shape. The extractor normalizes platform-dependent
+# PBS interpreter repository names without hiding a retained line.
+pbs_pyvenv_cfg_snapshot(
+    name = "action_probe_311.venv.cfg",
+    venv = ":action_probe_311.venv",
+)
+
+pbs_pyvenv_cfg_snapshot(
+    name = "action_probe_313.venv.cfg",
+    venv = ":action_probe_313.venv",
 )
 
 build_test(

@@ -38,3 +38,28 @@ def pbs_action_probe(name, python_version):
             ":" + name + ".venv",
         ],
     )
+
+def pbs_pyvenv_cfg_snapshot(name, venv):
+    """Copy a PBS-backed py_venv's generated pyvenv.cfg from its runfiles."""
+    native.genrule(
+        name = name,
+        testonly = True,
+        outs = [name],
+        cmd = """
+            launcher=$(execpath {venv})
+            runfiles="$$launcher".runfiles
+            pkg=$$(dirname "$$launcher" | sed 's|^bazel-out/[^/]*/bin/||')
+            vname=$$(basename "$$launcher")
+            cfg="$$runfiles/_main/$$pkg/.$$vname/pyvenv.cfg"
+            if [ ! -f "$$cfg" ]; then
+                echo "expected pyvenv.cfg at $$cfg, not found" >&2
+                ls -la "$$runfiles/_main/$$pkg/" 2>&1 >&2
+                exit 1
+            fi
+            # PBS interpreter repository names include the host OS and CPU.
+            # Keep the `home` line while removing only that volatile value.
+            sed -E 's|^home = .*|home = <PBS_INTERPRETER_HOME>|' "$$cfg" > $@
+        """.format(venv = venv),
+        tools = [venv],
+        visibility = ["//:__pkg__"],
+    )
