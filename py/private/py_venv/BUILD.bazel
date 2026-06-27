@@ -6,6 +6,7 @@ package(default_visibility = ["//py:__subpackages__"])
 
 exports_files([
     "_virtualenv.py",
+    "entries.py",
     "link.py",
     "venv.tmpl.sh",
     "venv_activate.tmpl.sh",
@@ -74,6 +75,16 @@ bzl_library(
         "@bazel_lib//lib:expand_make_vars",
         "@bazel_lib//lib:paths",
     ],
+)
+
+py_test(
+    name = "test_entries",
+    srcs = [
+        "entries.py",
+        "test_entries.py",
+    ],
+    imports = ["."],
+    main = "test_entries.py",
 )
 
 py_test(

@@ -30,9 +30,11 @@ distutils, etc.) treat it as a real venv:
                                                 whole-wheel fallback
 
 The whole tree is declared at analysis time as individual
-`ctx.actions.declare_file` / `ctx.actions.declare_symlink` outputs so
-Bazel's action cache treats each piece independently (no tree-artifact
-+ remote-exec materialisation surprises).
+`ctx.actions.declare_file` / `ctx.actions.declare_symlink` outputs (no
+tree-artifact + remote-exec materialisation surprises). When a non-Windows
+private hidden venv has an exec-configuration interpreter, its cheap
+site-package symlinks and console scripts are materialized in one action
+without changing the declared output shape.
 """
 
 load("@bazel_lib//lib:paths.bzl", "to_rlocation_path")
@@ -574,6 +576,7 @@ def assemble_venv(
         venv_activate_tmpl,
         virtualenv_shim_py,
         site_merge_script_py = None,
+        venv_entries_script_py = None,
         venv_name = None):
     """Declare every file + symlink that makes up a venv for a target.
 
@@ -603,6 +606,9 @@ def assemble_venv(
         wheel graph contains a regular package needing a physical merge; the
         merge action also requires the rule to declare the (optional)
         EXEC_TOOLS_TOOLCHAIN for an exec-configuration interpreter.
+      venv_entries_script_py: File — the leaf-entry materializer. When this
+        and an exec interpreter are available for a non-Windows target, cheap
+        site-package symlinks and console scripts are materialized together.
       venv_name: Optional str — explicit venv dir basename. Defaults to
         "." + safe_name + ".venv" when unset.
 
@@ -688,6 +694,23 @@ def assemble_venv(
     known_layout_site_pkgs = {w.site_packages_rfpath: True for w in wheels if w.top_levels}
 
     declared = []  # accumulator for all outputs
+    exec_runtime = None
+    if venv_entries_script_py != None or merge_groups:
+        exec_toolchain = ctx.toolchains[EXEC_TOOLS_TOOLCHAIN]
+        exec_runtime = exec_toolchain.exec_tools.exec_runtime if exec_toolchain else None
+    batch_entries = (
+        not is_windows and
+        exec_runtime != None and
+        venv_entries_script_py != None
+    )
+    entry_outputs = []
+    entry_arguments = ctx.actions.args()
+    if batch_entries:
+        # Bazel owns the parameter file, so a large venv still registers one
+        # action without first writing a manifest action. entries.py treats
+        # each parameter-file line as one JSON object.
+        entry_arguments.use_param_file("@%s", use_always = True)
+        entry_arguments.set_param_file_format("multiline")
 
     # Per-top-level site-packages symlink: a relative symlink escaping from
     # site-packages up to the runfiles root, then down into the owning
@@ -698,10 +721,19 @@ def assemble_venv(
     for tl, wheel_site_pkgs in top_level_to_site_pkgs.items():
         out = ctx.actions.declare_symlink("{}/{}".format(site_packages_rel, tl))
         extra_up = "../" * tl.count("/")
-        ctx.actions.symlink(
-            output = out,
-            target_path = "{}{}/{}/{}".format(extra_up, escape, wheel_site_pkgs, tl),
-        )
+        target_path = "{}{}/{}/{}".format(extra_up, escape, wheel_site_pkgs, tl)
+        if batch_entries:
+            entry_arguments.add(json.encode({
+                "kind": "symlink",
+                "output": out.path,
+                "target": target_path,
+            }))
+            entry_outputs.append(out)
+        else:
+            ctx.actions.symlink(
+                output = out,
+                target_path = target_path,
+            )
         declared.append(out)
 
     # Physical merges for regular packages that span wheels or collide at the
@@ -726,8 +758,6 @@ def assemble_venv(
                 group.site_packages_list,
                 group.root,
             ))
-        exec_toolchain = ctx.toolchains[EXEC_TOOLS_TOOLCHAIN]
-        exec_runtime = exec_toolchain.exec_tools.exec_runtime if exec_toolchain else None
         if exec_runtime == None:
             fail(("{}: wheels {} all contribute to the regular package `{}` — merging it " +
                   "requires an exec-configuration Python interpreter, but no `{}` toolchain " +
@@ -968,16 +998,39 @@ def assemble_venv(
     # Console-script wrappers under <venv>/bin/<name>.
     for name, target in console_scripts_map.items():
         script = ctx.actions.declare_file("{}/bin/{}".format(venv_name, name))
-        ctx.actions.write(
-            output = script,
-            content = _CONSOLE_SCRIPT_TEMPLATE.format(
-                name = name,
-                module = target.module,
-                func = target.func,
-            ),
-            is_executable = True,
+        content = _CONSOLE_SCRIPT_TEMPLATE.format(
+            name = name,
+            module = target.module,
+            func = target.func,
         )
+        if batch_entries:
+            entry_arguments.add(json.encode({
+                "kind": "file",
+                "output": script.path,
+                "content": content,
+                "executable": True,
+            }))
+            entry_outputs.append(script)
+        else:
+            ctx.actions.write(
+                output = script,
+                content = content,
+                is_executable = True,
+            )
         declared.append(script)
+
+    if entry_outputs:
+        ctx.actions.run(
+            mnemonic = "PyVenvEntries",
+            executable = exec_runtime.interpreter,
+            toolchain = EXEC_TOOLS_TOOLCHAIN,
+            arguments = [venv_entries_script_py.path, entry_arguments],
+            inputs = depset(
+                direct = [venv_entries_script_py],
+                transitive = [exec_runtime.files],
+            ),
+            outputs = entry_outputs,
+        )
 
     return struct(
         venv_name = venv_name,

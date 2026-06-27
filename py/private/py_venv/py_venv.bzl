@@ -50,7 +50,7 @@ def _interpreter_flags(ctx, include_main = False):
 
     return args
 
-def _assemble_shared(ctx):
+def _assemble_shared(ctx, venv_entries_script_py):
     """Resolve the py toolchain, virtual deps, imports depset — then run
     the shared venv-assembly helper.
     """
@@ -85,6 +85,7 @@ def _assemble_shared(ctx):
         venv_activate_tmpl = ctx.file._venv_activate_tmpl,
         virtualenv_shim_py = ctx.file._virtualenv_shim,
         site_merge_script_py = ctx.file._site_merge_script,
+        venv_entries_script_py = venv_entries_script_py,
         venv_name = ".{}".format(safe_name),
     )
 
@@ -114,7 +115,7 @@ def _py_venv_rule_impl(ctx):
     """A virtualenv target whose own executable activates the venv and
     exec's the interpreter — a `bazel run :name`-able venv."""
 
-    shared = _assemble_shared(ctx)
+    shared = _assemble_shared(ctx, None)
 
     ctx.actions.expand_template(
         template = ctx.file._run_tmpl,
@@ -251,6 +252,12 @@ does not reinsert a wheel.
         allow_single_file = True,
         default = "//py/tools/site_merge:site_merge.py",
     ),
+    # Tool for materializing cheap leaf outputs in one action when an
+    # exec-configuration interpreter is available.
+    "_venv_entries_script": attr.label(
+        allow_single_file = True,
+        default = ":entries.py",
+    ),
 })
 
 _lib_attrs.update(**_py_library.attrs)
@@ -289,10 +296,8 @@ _py_venv = rule(
     attrs = _attrs,
     toolchains = [
         PY_TOOLCHAIN,
-        # Optional: only consulted when a regular package needs a physical merge
-        # and assemble_venv needs an exec-config interpreter to run the
-        # site_merge action. Optional so venvs keep analyzing in setups
-        # that never registered rules_py's exec-tools toolchain.
+        # Optional: required when a regular package needs a physical
+        # site_merge action.
         config_common.toolchain_type(EXEC_TOOLS_TOOLCHAIN, mandatory = False),
     ],
     executable = True,
@@ -304,7 +309,7 @@ def _py_venv_lib_rule_impl(ctx):
     launcher and no RunEnvironmentInfo (Bazel rejects it on
     non-executable targets; py_venv_exec.bzl gates its read on
     `if RunEnvironmentInfo in venv`)."""
-    shared = _assemble_shared(ctx)
+    shared = _assemble_shared(ctx, ctx.file._venv_entries_script)
     return [
         DefaultInfo(runfiles = shared.runfiles),
         VirtualenvInfo(
@@ -330,8 +335,8 @@ _py_venv_lib = rule(
     attrs = _lib_attrs,
     toolchains = [
         PY_TOOLCHAIN,
-        # Same optional exec-tools dependency as `_py_venv`: assemble_venv
-        # needs it to run the site_merge action when a package needs a merge.
+        # Enables batched leaf outputs and is required by physical site_merge
+        # actions.
         config_common.toolchain_type(EXEC_TOOLS_TOOLCHAIN, mandatory = False),
     ],
     cfg = python_version_transition,
