@@ -202,6 +202,72 @@ def _root_pth_requires_physical_layout_test_impl(ctx):
     asserts.equals(env, True, requires_physical_layout)
     return unittest.end(env)
 
+def _package_module_requires_physical_layout_test_impl(ctx):
+    env = unittest.begin(ctx)
+    sp_a = "external/pypi_a/site-packages"
+    sp_b = "external/pypi_b/site-packages"
+    wheels = [
+        _make_wheel(
+            site_packages_rfpath = sp_a,
+            tl_claims = [("shape", _claim(sp_a, is_dir = True))],
+            top_levels = ["shape"],
+        ),
+        _make_wheel(
+            site_packages_rfpath = sp_b,
+            tl_claims = [("shape.py", _claim(sp_b))],
+            top_levels = ["shape.py"],
+        ),
+    ]
+    _, _, _, _, _, requires_physical_layout = resolve_wheel_collisions(
+        _mock_ctx(ctx.label),
+        wheels,
+    )
+    asserts.equals(env, True, requires_physical_layout)
+    return unittest.end(env)
+
+def _extension_module_requires_physical_layout_test_impl(ctx):
+    env = unittest.begin(ctx)
+    sp_a = "external/pypi_a/site-packages"
+    sp_b = "external/pypi_b/site-packages"
+    wheels = [
+        _make_wheel(
+            site_packages_rfpath = sp_a,
+            tl_claims = [("shape.cpython-39-darwin.so", _claim(sp_a, is_native = True))],
+            top_levels = ["shape.cpython-39-darwin.so"],
+        ),
+        _make_wheel(
+            site_packages_rfpath = sp_b,
+            tl_claims = [("shape.py", _claim(sp_b))],
+            top_levels = ["shape.py"],
+        ),
+    ]
+    _, _, _, _, _, requires_physical_layout = resolve_wheel_collisions(
+        _mock_ctx(ctx.label),
+        wheels,
+    )
+    asserts.equals(env, True, requires_physical_layout)
+    return unittest.end(env)
+
+def _same_wheel_shapes_stay_compact_test_impl(ctx):
+    env = unittest.begin(ctx)
+    sp = "external/pypi_a/site-packages"
+    wheels = [
+        _make_wheel(
+            site_packages_rfpath = sp,
+            tl_claims = [
+                ("shape", _claim(sp, is_dir = True)),
+                ("shape.py", _claim(sp)),
+            ],
+            top_levels = ["shape", "shape.py"],
+        ),
+    ]
+    _, _, _, _, _, requires_physical_layout = resolve_wheel_collisions(
+        _mock_ctx(ctx.label),
+        wheels,
+    )
+    asserts.equals(env, False, requires_physical_layout)
+    return unittest.end(env)
+
 def _unknown_layout_requires_physical_layout_test_impl(ctx):
     env = unittest.begin(ctx)
     wheels = [_make_wheel(site_packages_rfpath = "external/pypi_a/site-packages")]
@@ -218,6 +284,9 @@ _console_script_collision_test = unittest.make(_console_script_collision_test_im
 _duplicate_metadata_requires_physical_layout_test = unittest.make(_duplicate_metadata_requires_physical_layout_test_impl)
 _native_collision_requires_physical_layout_test = unittest.make(_native_collision_requires_physical_layout_test_impl)
 _root_pth_requires_physical_layout_test = unittest.make(_root_pth_requires_physical_layout_test_impl)
+_package_module_requires_physical_layout_test = unittest.make(_package_module_requires_physical_layout_test_impl)
+_extension_module_requires_physical_layout_test = unittest.make(_extension_module_requires_physical_layout_test_impl)
+_same_wheel_shapes_stay_compact_test = unittest.make(_same_wheel_shapes_stay_compact_test_impl)
 _unknown_layout_requires_physical_layout_test = unittest.make(_unknown_layout_requires_physical_layout_test_impl)
 
 def virtuals_resolvers_test_suite(name):
@@ -229,5 +298,8 @@ def virtuals_resolvers_test_suite(name):
         _duplicate_metadata_requires_physical_layout_test,
         _native_collision_requires_physical_layout_test,
         _root_pth_requires_physical_layout_test,
+        _package_module_requires_physical_layout_test,
+        _extension_module_requires_physical_layout_test,
+        _same_wheel_shapes_stay_compact_test,
         _unknown_layout_requires_physical_layout_test,
     )

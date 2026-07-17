@@ -229,7 +229,113 @@ _collision_error_test = analysistest.make(
     expect_failure = True,
 )
 
+def _shape_wheel_impl(ctx):
+    py_runtime = ctx.toolchains[PY_TOOLCHAIN].py3_runtime
+    install_tree = ctx.actions.declare_directory(ctx.label.name + ".install")
+    major = py_runtime.interpreter_version_info.major
+    minor = py_runtime.interpreter_version_info.minor
+    top_level, is_dir = {
+        "package": ("shape_package", True),
+        "package_module": ("shape_package.py", False),
+        "extension": ("shape_extension.so", False),
+        "extension_module": ("shape_extension.py", False),
+    }[ctx.attr.kind]
+    ctx.actions.run_shell(
+        outputs = [install_tree],
+        command = """
+set -eu
+site="$1/lib/python$2.$3/site-packages"
+mkdir -p "$site"
+case "$4" in
+  package)
+    mkdir -p "$site/shape_package"
+    printf 'VALUE = "package"\\n' > "$site/shape_package/__init__.py"
+    ;;
+  package_module)
+    printf 'VALUE = "module"\\n' > "$site/shape_package.py"
+    ;;
+  extension)
+    printf 'not a loadable extension' > "$site/shape_extension.so"
+    ;;
+  extension_module)
+    printf 'VALUE = "module"\\n' > "$site/shape_extension.py"
+    ;;
+esac
+""",
+        arguments = [install_tree.path, str(major), str(minor), ctx.attr.kind],
+    )
+    site_packages = "/".join([
+        segment
+        for segment in [
+            ctx.label.repo_name or ctx.workspace_name,
+            ctx.label.package,
+            install_tree.basename,
+        ]
+        if segment
+    ] + ["lib/python{}.{}/site-packages".format(major, minor)])
+    return [
+        DefaultInfo(
+            files = depset([install_tree]),
+            runfiles = ctx.runfiles(files = [install_tree]),
+        ),
+        PyInfo(
+            imports = depset([site_packages]),
+            transitive_sources = depset([install_tree]),
+            has_py2_only_sources = False,
+            has_py3_only_sources = True,
+            uses_shared_libraries = ctx.attr.kind == "extension",
+        ),
+        PyWheelsInfo(wheels = depset([make_wheel_record(
+            top_levels = (top_level,),
+            top_level_dirs = (top_level,) if is_dir else (),
+            site_packages_rfpath = site_packages,
+            install_tree = install_tree,
+        )])),
+    ]
+
+_shape_wheel = rule(
+    implementation = _shape_wheel_impl,
+    attrs = {"kind": attr.string(
+        mandatory = True,
+        values = ["package", "package_module", "extension", "extension_module"],
+    )},
+    toolchains = [PY_TOOLCHAIN],
+)
+
 def collision_order_test_suite():
+    _shape_wheel(
+        name = "_shape_package",
+        kind = "package",
+        tags = ["manual"],
+    )
+    _shape_wheel(
+        name = "_shape_package_module",
+        kind = "package_module",
+        tags = ["manual"],
+    )
+    _shape_wheel(
+        name = "_shape_extension",
+        kind = "extension",
+        tags = ["manual"],
+    )
+    _shape_wheel(
+        name = "_shape_extension_module",
+        kind = "extension_module",
+        tags = ["manual"],
+    )
+    py_test(
+        name = "cross_shape_collision_test",
+        srcs = ["test_cross_shape_collision.py"],
+        main = "test_cross_shape_collision.py",
+        package_collisions = "ignore",
+        deps = [
+            ":_shape_package",
+            ":_shape_package_module",
+            ":_shape_extension",
+            ":_shape_extension_module",
+        ],
+    )
+
     _wheel(
         name = "_collision_first",
         ordinary = True,

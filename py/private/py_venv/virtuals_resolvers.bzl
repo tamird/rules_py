@@ -516,12 +516,26 @@ def resolve_wheel_collisions(ctx, wheels):
     metadata_claimants = {}
     cs_claimants = {}
     wheel_by_sp = {}
+    import_claimants = {}
+    has_unknown_or_root_pth = False
+    has_cross_shape_collision = False
     for w in wheels:
         wheel_by_sp[w.site_packages_rfpath] = w
+        if not w.top_levels:
+            has_unknown_or_root_pth = True
         for tl in w.metadata_top_levels:
             metadata_claimants.setdefault(tl, []).append(w.site_packages_rfpath)
         for tl, claim in w.tl_claims:
             tl_claimants.setdefault(tl, []).append(claim)
+            if tl.endswith(".pth"):
+                has_unknown_or_root_pth = True
+            import_name = tl if claim.is_dir else tl.partition(".")[0]
+            if not has_cross_shape_collision:
+                shapes, sps = import_claimants.setdefault(import_name, ({}, {}))
+                shapes[tl] = True
+                sps[claim.site_packages] = True
+                if len(shapes) > 1 and len(sps) > 1:
+                    has_cross_shape_collision = True
         for name, claim in w.cs_claims:
             cs_claimants.setdefault(name, []).append(claim)
 
@@ -530,12 +544,6 @@ def resolve_wheel_collisions(ctx, wheels):
         for claimants in metadata_claimants.values()
         for loser in _distinct_ordered(claimants)[:-1]
     }
-    has_unknown_or_root_pth = any([
-        not w.top_levels or tl.endswith(".pth")
-        for w in wheels
-        for tl in w.top_levels or [""]
-    ])
-
     for tl, claimants in tl_claimants.items():
         _resolve_top_level(
             tl,
@@ -558,7 +566,7 @@ def resolve_wheel_collisions(ctx, wheels):
         console_scripts_map,
         state.merge_groups,
         collisions,
-        bool(duplicate_metadata_loser_sps) or bool(state.native_conflicted_projection) or has_unknown_or_root_pth,
+        bool(duplicate_metadata_loser_sps) or bool(state.native_conflicted_projection) or has_unknown_or_root_pth or has_cross_shape_collision,
     )
 
 def _build_wheel_lookups(wheels):

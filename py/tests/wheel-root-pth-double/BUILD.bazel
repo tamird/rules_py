@@ -121,6 +121,7 @@ genrule(
     srcs = [
         "a/apkg/__init__.py",
         "a/apkg/data.txt",
+        "a/apkg/py.typed",
         "a/METADATA",
     ],
     outs = ["compact_a-1.0-py3-none-any.whl"],
@@ -128,6 +129,7 @@ genrule(
         "$(execpath @bazel_tools//tools/zip:zipper) c $@",
         "apkg/__init__.py=$(execpath a/apkg/__init__.py)",
         "apkg/data.txt=$(execpath a/apkg/data.txt)",
+        "apkg/py.typed=$(execpath a/apkg/py.typed)",
         "pthtest_a-1.0.dist-info/METADATA=$(execpath a/METADATA)",
     ]),
     tools = ["@bazel_tools//tools/zip:zipper"],
@@ -137,12 +139,16 @@ genrule(
     name = "wheel_compact_b",
     srcs = [
         "b/bpkg/__init__.py",
+        "b/bpkg-stubs/__init__.pyi",
+        "b/bpkg-stubs/py.typed",
         "b/METADATA",
     ],
     outs = ["compact_b-1.0-py3-none-any.whl"],
     cmd = " ".join([
         "$(execpath @bazel_tools//tools/zip:zipper) c $@",
         "bpkg/__init__.py=$(execpath b/bpkg/__init__.py)",
+        "bpkg-stubs/__init__.pyi=$(execpath b/bpkg-stubs/__init__.pyi)",
+        "bpkg-stubs/py.typed=$(execpath b/bpkg-stubs/py.typed)",
         "pthtest_b-1.0.dist-info/METADATA=$(execpath b/METADATA)",
     ]),
     tools = ["@bazel_tools//tools/zip:zipper"],
@@ -162,6 +168,7 @@ py_unpacked_wheel(
     src = ":compact_b-1.0-py3-none-any.whl",
     top_levels = [
         "bpkg",
+        "bpkg-stubs",
         "pthtest_b-1.0.dist-info",
     ],
 )
@@ -182,4 +189,16 @@ sh_test(
     name = "compact_manifest_only_test",
     srcs = ["compact_manifest_only_test.sh"],
     data = [":compact_runtime_test"],
+)
+
+py_test(
+    name = "physical_typing_test",
+    srcs = ["physical_typing_test.py"],
+    expose_venv = True,
+    isolated = False,
+    main = "physical_typing_test.py",
+    deps = [
+        ":compact_a",
+        ":compact_b",
+    ],
 )
