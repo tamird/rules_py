@@ -24,3 +24,8 @@ env -u RUNFILES_DIR \
   RUNFILES_MANIFEST_ONLY=1 \
   RUNFILES_MANIFEST_FILE="${manifest}" \
   "${venv}/bin/python" -B -I "${package}/compact_runtime_test.py"
+
+env -u RUNFILES_MANIFEST_ONLY \
+  RUNFILES_DIR="${TEST_TMPDIR}/nonexistent-runfiles" \
+  RUNFILES_MANIFEST_FILE="${manifest}" \
+  "${venv}/bin/python" -B -I "${package}/compact_runtime_test.py"

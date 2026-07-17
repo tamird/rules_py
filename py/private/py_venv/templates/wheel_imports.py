@@ -19,9 +19,13 @@ def _append(path):
             for entry in sys.path
             if isinstance(entry, str)
         }
-    if normalized not in _KNOWN_PATHS and os.path.exists(path):
-        sys.path.append(path)
-        _KNOWN_PATHS.add(normalized)
+    if normalized in _KNOWN_PATHS:
+        return os.path.exists(path)
+    if not os.path.exists(path):
+        return False
+    sys.path.append(path)
+    _KNOWN_PATHS.add(normalized)
+    return True
 
 
 def _manifest_entries(path):
@@ -43,24 +47,23 @@ def _manifest_entries(path):
 def add(logical, venv_escape):
     """Resolve and add one known, root-.pth-free wheel import root."""
     runfiles_dir = os.environ.get("RUNFILES_DIR")
-    if runfiles_dir and os.environ.get("RUNFILES_MANIFEST_ONLY") != "1":
-        _append(os.path.join(runfiles_dir, logical))
+    if (runfiles_dir and os.environ.get("RUNFILES_MANIFEST_ONLY") != "1" and
+        _append(os.path.join(runfiles_dir, logical))):
         return
 
     manifest = os.environ.get("RUNFILES_MANIFEST_FILE")
-    if not manifest:
-        _append(os.path.join(sys.prefix, venv_escape, logical))
-        return
+    if manifest:
+        global _MANIFEST
+        if _MANIFEST is None:
+            _MANIFEST = _manifest_entries(manifest)
 
-    global _MANIFEST
-    if _MANIFEST is None:
-        _MANIFEST = _manifest_entries(manifest)
+        prefix = logical
+        while prefix:
+            target = _MANIFEST.get(prefix)
+            if target is not None:
+                suffix = logical[len(prefix) :].lstrip("/")
+                if _append(os.path.join(target, suffix.replace("/", os.sep))):
+                    return
+            prefix = prefix.rpartition("/")[0]
 
-    prefix = logical
-    while prefix:
-        target = _MANIFEST.get(prefix)
-        if target is not None:
-            suffix = logical[len(prefix) :].lstrip("/")
-            _append(os.path.join(target, suffix.replace("/", os.sep)))
-            return
-        prefix = prefix.rpartition("/")[0]
+    _append(os.path.join(sys.prefix, venv_escape, logical))

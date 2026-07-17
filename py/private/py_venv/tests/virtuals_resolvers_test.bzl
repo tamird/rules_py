@@ -268,6 +268,52 @@ def _same_wheel_shapes_stay_compact_test_impl(ctx):
     asserts.equals(env, False, requires_physical_layout)
     return unittest.end(env)
 
+def _namespace_package_module_requires_physical_layout_test_impl(ctx):
+    env = unittest.begin(ctx)
+    sp_a = "external/pypi_a/site-packages"
+    sp_b = "external/pypi_b/site-packages"
+    wheels = [
+        _make_wheel(
+            site_packages_rfpath = sp_a,
+            tl_claims = [("ns", _claim(sp_a, is_ns = True, is_dir = True, ns_entries = ["ns/shape"]))],
+            top_levels = ["ns"],
+        ),
+        _make_wheel(
+            site_packages_rfpath = sp_b,
+            tl_claims = [("ns", _claim(sp_b, is_ns = True, is_dir = True, ns_entries = ["ns/shape.py"]))],
+            top_levels = ["ns"],
+        ),
+    ]
+    _, _, _, _, _, requires_physical_layout = resolve_wheel_collisions(
+        _mock_ctx(ctx.label),
+        wheels,
+    )
+    asserts.equals(env, True, requires_physical_layout)
+    return unittest.end(env)
+
+def _namespace_extension_module_requires_physical_layout_test_impl(ctx):
+    env = unittest.begin(ctx)
+    sp_a = "external/pypi_a/site-packages"
+    sp_b = "external/pypi_b/site-packages"
+    wheels = [
+        _make_wheel(
+            site_packages_rfpath = sp_a,
+            tl_claims = [("ns", _claim(sp_a, is_ns = True, is_dir = True, ns_entries = ["ns/shape.cpython-39-darwin.so"]))],
+            top_levels = ["ns"],
+        ),
+        _make_wheel(
+            site_packages_rfpath = sp_b,
+            tl_claims = [("ns", _claim(sp_b, is_ns = True, is_dir = True, ns_entries = ["ns/shape.py"]))],
+            top_levels = ["ns"],
+        ),
+    ]
+    _, _, _, _, _, requires_physical_layout = resolve_wheel_collisions(
+        _mock_ctx(ctx.label),
+        wheels,
+    )
+    asserts.equals(env, True, requires_physical_layout)
+    return unittest.end(env)
+
 def _unknown_layout_requires_physical_layout_test_impl(ctx):
     env = unittest.begin(ctx)
     wheels = [_make_wheel(site_packages_rfpath = "external/pypi_a/site-packages")]
@@ -287,6 +333,8 @@ _root_pth_requires_physical_layout_test = unittest.make(_root_pth_requires_physi
 _package_module_requires_physical_layout_test = unittest.make(_package_module_requires_physical_layout_test_impl)
 _extension_module_requires_physical_layout_test = unittest.make(_extension_module_requires_physical_layout_test_impl)
 _same_wheel_shapes_stay_compact_test = unittest.make(_same_wheel_shapes_stay_compact_test_impl)
+_namespace_package_module_requires_physical_layout_test = unittest.make(_namespace_package_module_requires_physical_layout_test_impl)
+_namespace_extension_module_requires_physical_layout_test = unittest.make(_namespace_extension_module_requires_physical_layout_test_impl)
 _unknown_layout_requires_physical_layout_test = unittest.make(_unknown_layout_requires_physical_layout_test_impl)
 
 def virtuals_resolvers_test_suite(name):
@@ -301,5 +349,7 @@ def virtuals_resolvers_test_suite(name):
         _package_module_requires_physical_layout_test,
         _extension_module_requires_physical_layout_test,
         _same_wheel_shapes_stay_compact_test,
+        _namespace_package_module_requires_physical_layout_test,
+        _namespace_extension_module_requires_physical_layout_test,
         _unknown_layout_requires_physical_layout_test,
     )

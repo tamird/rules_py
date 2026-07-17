@@ -67,7 +67,12 @@ try:
     os.path.abspath = _abspath
     before = list(sys.path)
     wheel_imports._KNOWN_PATHS = None
-    add_calls = 2 * len(imports) + 1
+    add_calls = 2 * len(imports) + 2
+    runfiles_dir = os.environ.get("RUNFILES_DIR")
+    if (runfiles_dir and os.environ.get("RUNFILES_MANIFEST_FILE") and
+        os.environ.get("RUNFILES_MANIFEST_ONLY") != "1" and
+        any(not (Path(runfiles_dir) / logical).exists() for logical, _ in imports)):
+        add_calls += 2 * len(imports) + 1
     for logical, escape in imports:
         wheel_imports.add(logical + "/.", escape)
         wheel_imports.add(logical, escape)
@@ -78,7 +83,8 @@ try:
         runfiles_dir = os.environ.pop("RUNFILES_DIR", None)
         manifest = os.environ.pop("RUNFILES_MANIFEST_FILE", None)
         try:
-            add_calls += len(imports)
+            os.environ["RUNFILES_DIR"] = "/nonexistent-runfiles"
+            add_calls += 2 * len(imports)
             for logical, escape in imports:
                 wheel_imports.add(logical, escape)
             assert sys.path == before, sys.path

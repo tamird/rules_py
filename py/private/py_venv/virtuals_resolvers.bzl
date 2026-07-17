@@ -529,13 +529,18 @@ def resolve_wheel_collisions(ctx, wheels):
             tl_claimants.setdefault(tl, []).append(claim)
             if tl.endswith(".pth"):
                 has_unknown_or_root_pth = True
-            import_name = tl if claim.is_dir else tl.partition(".")[0]
-            if not has_cross_shape_collision:
-                shapes, sps = import_claimants.setdefault(import_name, ({}, {}))
-                shapes[tl] = True
-                sps[claim.site_packages] = True
-                if len(shapes) > 1 and len(sps) > 1:
-                    has_cross_shape_collision = True
+            if not has_cross_shape_collision and not has_unknown_or_root_pth:
+                entries = claim.ns_entries
+                for i in range(len(entries) + 1):
+                    entry = tl if i == 0 else entries[i - 1]
+                    parent, separator, basename = entry.rpartition("/")
+                    import_name = parent + separator + (basename if entry == tl and claim.is_dir else basename.partition(".")[0])
+                    shapes, sps = import_claimants.setdefault(import_name, ({}, {}))
+                    shapes[entry] = True
+                    sps[claim.site_packages] = True
+                    if len(shapes) > 1 and len(sps) > 1:
+                        has_cross_shape_collision = True
+                        break
         for name, claim in w.cs_claims:
             cs_claimants.setdefault(name, []).append(claim)
 

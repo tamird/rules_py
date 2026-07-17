@@ -234,12 +234,17 @@ def _shape_wheel_impl(ctx):
     install_tree = ctx.actions.declare_directory(ctx.label.name + ".install")
     major = py_runtime.interpreter_version_info.major
     minor = py_runtime.interpreter_version_info.minor
-    top_level, is_dir = {
-        "package": ("shape_package", True),
-        "package_module": ("shape_package.py", False),
-        "extension": ("shape_extension.so", False),
-        "extension_module": ("shape_extension.py", False),
+    entry, is_dir, is_ns = {
+        "package": ("shape_package", True, False),
+        "package_module": ("shape_package.py", False, False),
+        "extension": ("shape_extension.so", False, False),
+        "extension_module": ("shape_extension.py", False, False),
+        "nested_package": ("shape_ns/package", True, True),
+        "nested_package_module": ("shape_ns/package.py", False, True),
+        "nested_extension": ("shape_ns/extension.so", False, True),
+        "nested_extension_module": ("shape_ns/extension.py", False, True),
     }[ctx.attr.kind]
+    top_level = entry.split("/")[0]
     ctx.actions.run_shell(
         outputs = [install_tree],
         command = """
@@ -259,6 +264,22 @@ case "$4" in
     ;;
   extension_module)
     printf 'VALUE = "module"\\n' > "$site/shape_extension.py"
+    ;;
+  nested_package)
+    mkdir -p "$site/shape_ns/package"
+    printf 'VALUE = "package"\\n' > "$site/shape_ns/package/__init__.py"
+    ;;
+  nested_package_module)
+    mkdir -p "$site/shape_ns"
+    printf 'VALUE = "module"\\n' > "$site/shape_ns/package.py"
+    ;;
+  nested_extension)
+    mkdir -p "$site/shape_ns"
+    printf 'not a loadable extension' > "$site/shape_ns/extension.so"
+    ;;
+  nested_extension_module)
+    mkdir -p "$site/shape_ns"
+    printf 'VALUE = "module"\\n' > "$site/shape_ns/extension.py"
     ;;
 esac
 """,
@@ -283,11 +304,13 @@ esac
             transitive_sources = depset([install_tree]),
             has_py2_only_sources = False,
             has_py3_only_sources = True,
-            uses_shared_libraries = ctx.attr.kind == "extension",
+            uses_shared_libraries = ctx.attr.kind in ["extension", "nested_extension"],
         ),
         PyWheelsInfo(wheels = depset([make_wheel_record(
             top_levels = (top_level,),
-            top_level_dirs = (top_level,) if is_dir else (),
+            top_level_dirs = (top_level,) if is_dir or is_ns else (),
+            namespace_top_levels = (top_level,) if is_ns else (),
+            namespace_entries = (entry,) if is_ns else (),
             site_packages_rfpath = site_packages,
             install_tree = install_tree,
         )])),
@@ -297,7 +320,16 @@ _shape_wheel = rule(
     implementation = _shape_wheel_impl,
     attrs = {"kind": attr.string(
         mandatory = True,
-        values = ["package", "package_module", "extension", "extension_module"],
+        values = [
+            "package",
+            "package_module",
+            "extension",
+            "extension_module",
+            "nested_package",
+            "nested_package_module",
+            "nested_extension",
+            "nested_extension_module",
+        ],
     )},
     toolchains = [PY_TOOLCHAIN],
 )
@@ -323,6 +355,26 @@ def collision_order_test_suite():
         kind = "extension_module",
         tags = ["manual"],
     )
+    _shape_wheel(
+        name = "_shape_nested_package",
+        kind = "nested_package",
+        tags = ["manual"],
+    )
+    _shape_wheel(
+        name = "_shape_nested_package_module",
+        kind = "nested_package_module",
+        tags = ["manual"],
+    )
+    _shape_wheel(
+        name = "_shape_nested_extension",
+        kind = "nested_extension",
+        tags = ["manual"],
+    )
+    _shape_wheel(
+        name = "_shape_nested_extension_module",
+        kind = "nested_extension_module",
+        tags = ["manual"],
+    )
     py_test(
         name = "cross_shape_collision_test",
         srcs = ["test_cross_shape_collision.py"],
@@ -333,6 +385,18 @@ def collision_order_test_suite():
             ":_shape_package_module",
             ":_shape_extension",
             ":_shape_extension_module",
+        ],
+    )
+    py_test(
+        name = "nested_cross_shape_collision_test",
+        srcs = ["test_nested_cross_shape_collision.py"],
+        main = "test_nested_cross_shape_collision.py",
+        package_collisions = "ignore",
+        deps = [
+            ":_shape_nested_package",
+            ":_shape_nested_package_module",
+            ":_shape_nested_extension",
+            ":_shape_nested_extension_module",
         ],
     )
 
