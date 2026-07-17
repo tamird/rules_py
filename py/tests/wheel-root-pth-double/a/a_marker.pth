@@ -1,1 +1,1 @@
-import sys; sys.path.append('rules_py_pth_sentinel_a')
+import bpkg, sys; sys.path.append('rules_py_pth_sentinel_a')

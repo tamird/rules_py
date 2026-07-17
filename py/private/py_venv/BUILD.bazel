@@ -9,6 +9,7 @@ exports_files([
     "templates/link.py",
     "templates/venv.tmpl.sh",
     "templates/venv_activate.tmpl.sh",
+    "templates/wheel_imports.py",
 ])
 
 bool_flag(

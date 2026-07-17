@@ -64,6 +64,7 @@ def _new_state():
         merge_groups = [],
         conflicted_roots = {},
         ns_claimant_sps = {},
+        native_conflicted_projection = {},
     )
 
 def _skip(state, sp, tl):
@@ -264,6 +265,7 @@ def _resolve_native_span(
     )
     native_winner_by_root = {}
     for root in native_roots:
+        state.native_conflicted_projection[root] = True
         regulars = [
             c
             for c in unique_claimants
@@ -330,6 +332,7 @@ def _resolve_directory_collision(
             break
 
     if not all_covered:
+        state.native_conflicted_projection[tl] = True
         winner = [c for c in distinct_claimants if not c.is_ns][-1]
         state.top_level_to_site_pkgs[tl] = winner.site_packages
         for c in distinct_claimants:
@@ -503,7 +506,7 @@ def resolve_wheel_collisions(ctx, wheels):
 
     Returns:
       (top_level_to_site_pkgs, fully_covered, console_scripts_map,
-       merge_groups, collisions)
+       merge_groups, collisions, requires_physical_layout)
     """
     collisions = []
     complain = _make_collision_recorder(ctx, collisions)
@@ -527,6 +530,11 @@ def resolve_wheel_collisions(ctx, wheels):
         for claimants in metadata_claimants.values()
         for loser in _distinct_ordered(claimants)[:-1]
     }
+    has_unknown_or_root_pth = any([
+        not w.top_levels or tl.endswith(".pth")
+        for w in wheels
+        for tl in w.top_levels or [""]
+    ])
 
     for tl, claimants in tl_claimants.items():
         _resolve_top_level(
@@ -550,6 +558,7 @@ def resolve_wheel_collisions(ctx, wheels):
         console_scripts_map,
         state.merge_groups,
         collisions,
+        bool(duplicate_metadata_loser_sps) or bool(state.native_conflicted_projection) or has_unknown_or_root_pth,
     )
 
 def _build_wheel_lookups(wheels):
@@ -569,9 +578,9 @@ def compute_wheel_plan(ctx, wheels):
     Returns a struct with all fields needed by ``PyWheelPlanInfo``:
     ``wheel_fingerprints``, ``top_level_to_site_pkgs``, ``fully_covered``,
     ``console_scripts_map``, ``merge_groups``, ``tree_by_sp``,
-    ``known_layout``, ``collisions``.
+    ``known_layout``, ``collisions``, ``requires_physical_layout``.
     """
-    top_level, fully_covered, cs_map, merge_groups, collisions = \
+    top_level, fully_covered, cs_map, merge_groups, collisions, requires_physical_layout = \
         resolve_wheel_collisions(ctx, wheels)
     tree_by_sp, known_layout = _build_wheel_lookups(wheels)
     fingerprints = tuple(sorted([w.site_packages_rfpath for w in wheels]))
@@ -584,6 +593,7 @@ def compute_wheel_plan(ctx, wheels):
         tree_by_sp = tree_by_sp,
         known_layout = known_layout,
         collisions = collisions,
+        requires_physical_layout = requires_physical_layout,
     )
 
 def enforce_collision_policy(collisions, package_collisions):

@@ -64,6 +64,19 @@ def main():
         )
         sys.exit(1)
 
+    sentinels = [
+        entry
+        for entry in sys.path
+        if entry in (SENTINEL_A, SENTINEL_B)
+    ]
+    expected_order = [SENTINEL_A, SENTINEL_B] * count_a
+    if sentinels != expected_order:
+        print(
+            "FAIL: projected root .pth files did not execute in filename order "
+            f"(got {sentinels}, expected {expected_order})."
+        )
+        sys.exit(1)
+
     print("PASS: both wheel-root .pth files executed the same number of times.")
 
 

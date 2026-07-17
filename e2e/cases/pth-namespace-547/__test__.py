@@ -5,11 +5,8 @@ The jaraco.functools and jaraco.classes packages both contribute to the
 verifying that the venv correctly supports packages that share a
 top-level namespace.
 
-Also asserts the namespace is merged CONCRETELY into site-packages:
-static tools (mypy, pyright) inspect `site-packages/` directly and never
-execute `.pth` files, so a namespace that only resolves through the
-`.pth` fallback is invisible to them — along with the subpackages'
-`py.typed` markers.
+The exposed variant also checks the concrete site-packages layout required by
+static tools. Ordinary targets import the same namespace from wheel roots.
 """
 
 import os
@@ -45,7 +42,7 @@ def test_jaraco_is_namespace_package():
 
 
 def test_concrete_namespace_entries_in_site_packages():
-    """The merged namespace must exist concretely in site-packages.
+    """Only exposed venvs materialize the namespace in site-packages.
 
     Mimics how mypy/pyright discover packages: plain directory traversal
     of site-packages, without importing and without executing `.pth`
@@ -57,6 +54,10 @@ def test_concrete_namespace_entries_in_site_packages():
     assert os.path.isdir(site_packages), f"no site-packages at {site_packages}"
 
     jaraco_dir = os.path.join(site_packages, "jaraco")
+    if os.environ.get("EXPECT_PHYSICAL_VENV") != "1":
+        assert not os.path.exists(jaraco_dir), jaraco_dir
+        return
+
     assert os.path.isdir(jaraco_dir), (
         f"site-packages has no concrete jaraco/ entry at {jaraco_dir}; "
         "static tools (mypy/pyright) cannot see the namespace package "

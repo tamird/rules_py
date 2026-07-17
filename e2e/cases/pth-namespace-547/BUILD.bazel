@@ -6,6 +6,7 @@ py_test(
     name = "test",
     srcs = ["__test__.py"],
     dep_group = "pth-namespace-547",
+    env = {"EXPECT_PHYSICAL_VENV": "1"},
     expose_venv = True,
     isolated = False,
     main = "__test__.py",
@@ -48,9 +49,9 @@ py_test(
     ],
 )
 
-# Test namespace packages with the legacy py_test (.pth strategy).
+# Test namespace packages with the ordinary wheel-import-root layout.
 py_test(
-    name = "test_legacy",
+    name = "test_ordinary",
     srcs = ["__test__.py"],
     dep_group = "pth-namespace-547",
     main = "__test__.py",

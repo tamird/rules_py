@@ -106,15 +106,14 @@ _attrs = {
     "top_levels": attr.string_list(
         doc = """Complete list of immediate entries the wheel installs into site-packages.
 
-When set, downstream rules can assemble a merged `site-packages/` tree via
-`ctx.actions.symlink` instead of relying on `.pth` entries. The list must
-include packages, modules, `.pth` files, and `*.dist-info` directories. If left
-empty (the default), other rules preserve the complete wheel root and fall back
-to `.pth`-based import resolution.
+The list must include packages, modules, `.pth` files, and `*.dist-info`
+directories. Downstream rules use it to resolve collisions and select either
+compact wheel-root imports or a merged physical `site-packages/` tree. If left
+empty (the default), venv assembly preserves the physical fallback because the
+wheel may contain root `.pth` files.
 
 Typically populated by the `uv` wheel-install repo rule. Hand-written
-`py_unpacked_wheel` targets may populate this to opt into symlink-based
-venv assembly.
+`py_unpacked_wheel` targets may populate this to describe their layout.
 """,
         default = [],
     ),

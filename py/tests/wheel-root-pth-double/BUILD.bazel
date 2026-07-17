@@ -1,3 +1,4 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//py:defs.bzl", "py_test", "py_unpacked_wheel")
 
 # Regression gate for assemble_venv's `_format_imp` fallback (see
@@ -16,6 +17,7 @@ genrule(
     name = "wheel_a",
     srcs = [
         "a/apkg/__init__.py",
+        "a/apkg/data.txt",
         "a/shared/__init__.py",
         "a/a_marker.pth",
         "a/entry_points.txt",
@@ -25,6 +27,7 @@ genrule(
     cmd = " ".join([
         "$(execpath @bazel_tools//tools/zip:zipper) c $@",
         "apkg/__init__.py=$(execpath a/apkg/__init__.py)",
+        "apkg/data.txt=$(execpath a/apkg/data.txt)",
         "shared/__init__.py=$(execpath a/shared/__init__.py)",
         "a_marker.pth=$(execpath a/a_marker.pth)",
         "pthtest_a-1.0.dist-info/entry_points.txt=$(execpath a/entry_points.txt)",
@@ -107,5 +110,76 @@ py_test(
     srcs = ["unknown_layout_pth_test.py"],
     isolated = False,
     main = "unknown_layout_pth_test.py",
-    deps = [":pthtest_unknown_layout"],
+    deps = [
+        ":compact_b",
+        ":pthtest_unknown_layout",
+    ],
+)
+
+genrule(
+    name = "wheel_compact_a",
+    srcs = [
+        "a/apkg/__init__.py",
+        "a/apkg/data.txt",
+        "a/METADATA",
+    ],
+    outs = ["compact_a-1.0-py3-none-any.whl"],
+    cmd = " ".join([
+        "$(execpath @bazel_tools//tools/zip:zipper) c $@",
+        "apkg/__init__.py=$(execpath a/apkg/__init__.py)",
+        "apkg/data.txt=$(execpath a/apkg/data.txt)",
+        "pthtest_a-1.0.dist-info/METADATA=$(execpath a/METADATA)",
+    ]),
+    tools = ["@bazel_tools//tools/zip:zipper"],
+)
+
+genrule(
+    name = "wheel_compact_b",
+    srcs = [
+        "b/bpkg/__init__.py",
+        "b/METADATA",
+    ],
+    outs = ["compact_b-1.0-py3-none-any.whl"],
+    cmd = " ".join([
+        "$(execpath @bazel_tools//tools/zip:zipper) c $@",
+        "bpkg/__init__.py=$(execpath b/bpkg/__init__.py)",
+        "pthtest_b-1.0.dist-info/METADATA=$(execpath b/METADATA)",
+    ]),
+    tools = ["@bazel_tools//tools/zip:zipper"],
+)
+
+py_unpacked_wheel(
+    name = "compact_a",
+    src = ":compact_a-1.0-py3-none-any.whl",
+    top_levels = [
+        "apkg",
+        "pthtest_a-1.0.dist-info",
+    ],
+)
+
+py_unpacked_wheel(
+    name = "compact_b",
+    src = ":compact_b-1.0-py3-none-any.whl",
+    top_levels = [
+        "bpkg",
+        "pthtest_b-1.0.dist-info",
+    ],
+)
+
+py_test(
+    name = "compact_runtime_test",
+    srcs = ["compact_runtime_test.py"],
+    isolated = False,
+    main = "compact_runtime_test.py",
+    package_collisions = "ignore",
+    deps = [
+        ":compact_a",
+        ":compact_b",
+    ],
+)
+
+sh_test(
+    name = "compact_manifest_only_test",
+    srcs = ["compact_manifest_only_test.sh"],
+    data = [":compact_runtime_test"],
 )

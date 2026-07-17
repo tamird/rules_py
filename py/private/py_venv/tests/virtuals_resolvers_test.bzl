@@ -63,7 +63,7 @@ def _single_wheel_test_impl(ctx):
             top_levels = ["foo"],
         ),
     ]
-    top_level, fully_covered, cs_map, merge_groups, _collisions = resolve_wheel_collisions(
+    top_level, fully_covered, cs_map, merge_groups, _collisions, requires_physical_layout = resolve_wheel_collisions(
         mock_ctx,
         wheels,
     )
@@ -72,6 +72,7 @@ def _single_wheel_test_impl(ctx):
     asserts.equals(env, "foo.cli", cs_map["foo-cli"].module)
     asserts.equals(env, "main", cs_map["foo-cli"].func)
     asserts.equals(env, 0, len(merge_groups))
+    asserts.false(env, requires_physical_layout)
     return unittest.end(env)
 
 def _namespace_merge_test_impl(ctx):
@@ -82,7 +83,7 @@ def _namespace_merge_test_impl(ctx):
     wheels = [
         _make_wheel(
             site_packages_rfpath = sp_a,
-            metadata_top_levels = ["ns"],
+            metadata_top_levels = [],
             tl_claims = [("ns", _claim(sp_a, is_ns = True, ns_entries = ["ns/sub_a"]))],
             cs_claims = [],
             ns_entries = ["ns/sub_a"],
@@ -91,7 +92,7 @@ def _namespace_merge_test_impl(ctx):
         ),
         _make_wheel(
             site_packages_rfpath = sp_b,
-            metadata_top_levels = ["ns"],
+            metadata_top_levels = [],
             tl_claims = [("ns", _claim(sp_b, is_ns = True, ns_entries = ["ns/sub_b"]))],
             cs_claims = [],
             ns_entries = ["ns/sub_b"],
@@ -99,13 +100,14 @@ def _namespace_merge_test_impl(ctx):
             top_levels = ["ns"],
         ),
     ]
-    top_level, fully_covered, cs_map, merge_groups, _collisions = resolve_wheel_collisions(
+    top_level, fully_covered, cs_map, merge_groups, _collisions, requires_physical_layout = resolve_wheel_collisions(
         mock_ctx,
         wheels,
     )
     asserts.equals(env, sp_a, top_level["ns/sub_a"])
     asserts.equals(env, sp_b, top_level["ns/sub_b"])
     asserts.equals(env, 0, len(merge_groups))
+    asserts.false(env, requires_physical_layout)
     return unittest.end(env)
 
 def _console_script_collision_test_impl(ctx):
@@ -117,28 +119,106 @@ def _console_script_collision_test_impl(ctx):
         _make_wheel(
             site_packages_rfpath = sp_a,
             metadata_top_levels = [],
-            tl_claims = [],
+            tl_claims = [("pkg_a", _claim(sp_a, is_dir = True))],
             cs_claims = [("tool", _cs_claim(sp_a, "pkg_a.cli", "main"))],
-            top_levels = [],
+            top_levels = ["pkg_a"],
         ),
         _make_wheel(
             site_packages_rfpath = sp_b,
             metadata_top_levels = [],
-            tl_claims = [],
+            tl_claims = [("pkg_b", _claim(sp_b, is_dir = True))],
             cs_claims = [("tool", _cs_claim(sp_b, "pkg_b.cli", "main"))],
-            top_levels = [],
+            top_levels = ["pkg_b"],
         ),
     ]
-    _, _, cs_map, _, _ = resolve_wheel_collisions(
+    _, _, cs_map, _, _, requires_physical_layout = resolve_wheel_collisions(
         mock_ctx,
         wheels,
     )
     asserts.equals(env, "pkg_b.cli", cs_map["tool"].module)
+    asserts.false(env, requires_physical_layout)
+    return unittest.end(env)
+
+def _duplicate_metadata_requires_physical_layout_test_impl(ctx):
+    env = unittest.begin(ctx)
+    sp_a = "external/pypi_a/site-packages"
+    sp_b = "external/pypi_b/site-packages"
+    wheels = [
+        _make_wheel(
+            site_packages_rfpath = sp_a,
+            metadata_top_levels = ["shared-1.0.dist-info"],
+            top_levels = ["shared-1.0.dist-info"],
+        ),
+        _make_wheel(
+            site_packages_rfpath = sp_b,
+            metadata_top_levels = ["shared-1.0.dist-info"],
+            top_levels = ["shared-1.0.dist-info"],
+        ),
+    ]
+    _, _, _, _, _, requires_physical_layout = resolve_wheel_collisions(
+        _mock_ctx(ctx.label),
+        wheels,
+    )
+    asserts.equals(env, True, requires_physical_layout)
+    return unittest.end(env)
+
+def _native_collision_requires_physical_layout_test_impl(ctx):
+    env = unittest.begin(ctx)
+    sp_a = "external/pypi_a/site-packages"
+    sp_b = "external/pypi_b/site-packages"
+    wheels = [
+        _make_wheel(
+            site_packages_rfpath = sp_a,
+            tl_claims = [("native", _claim(sp_a, is_dir = True))],
+            top_levels = ["native"],
+        ),
+        _make_wheel(
+            site_packages_rfpath = sp_b,
+            tl_claims = [("native", _claim(sp_b, is_dir = True, is_native = True))],
+            top_levels = ["native"],
+        ),
+    ]
+    _, _, _, _, _, requires_physical_layout = resolve_wheel_collisions(
+        _mock_ctx(ctx.label),
+        wheels,
+    )
+    asserts.equals(env, True, requires_physical_layout)
+    return unittest.end(env)
+
+def _root_pth_requires_physical_layout_test_impl(ctx):
+    env = unittest.begin(ctx)
+    sp = "external/pypi_a/site-packages"
+    wheels = [
+        _make_wheel(
+            site_packages_rfpath = sp,
+            tl_claims = [("marker.pth", _claim(sp))],
+            top_levels = ["marker.pth"],
+        ),
+    ]
+    _, _, _, _, _, requires_physical_layout = resolve_wheel_collisions(
+        _mock_ctx(ctx.label),
+        wheels,
+    )
+    asserts.equals(env, True, requires_physical_layout)
+    return unittest.end(env)
+
+def _unknown_layout_requires_physical_layout_test_impl(ctx):
+    env = unittest.begin(ctx)
+    wheels = [_make_wheel(site_packages_rfpath = "external/pypi_a/site-packages")]
+    _, _, _, _, _, requires_physical_layout = resolve_wheel_collisions(
+        _mock_ctx(ctx.label),
+        wheels,
+    )
+    asserts.equals(env, True, requires_physical_layout)
     return unittest.end(env)
 
 _single_wheel_test = unittest.make(_single_wheel_test_impl)
 _namespace_merge_test = unittest.make(_namespace_merge_test_impl)
 _console_script_collision_test = unittest.make(_console_script_collision_test_impl)
+_duplicate_metadata_requires_physical_layout_test = unittest.make(_duplicate_metadata_requires_physical_layout_test_impl)
+_native_collision_requires_physical_layout_test = unittest.make(_native_collision_requires_physical_layout_test_impl)
+_root_pth_requires_physical_layout_test = unittest.make(_root_pth_requires_physical_layout_test_impl)
+_unknown_layout_requires_physical_layout_test = unittest.make(_unknown_layout_requires_physical_layout_test_impl)
 
 def virtuals_resolvers_test_suite(name):
     unittest.suite(
@@ -146,4 +226,8 @@ def virtuals_resolvers_test_suite(name):
         _single_wheel_test,
         _namespace_merge_test,
         _console_script_collision_test,
+        _duplicate_metadata_requires_physical_layout_test,
+        _native_collision_requires_physical_layout_test,
+        _root_pth_requires_physical_layout_test,
+        _unknown_layout_requires_physical_layout_test,
     )

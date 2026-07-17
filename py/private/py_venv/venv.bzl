@@ -1,10 +1,9 @@
 """Build-time assembly of a Python virtualenv via ctx.actions.symlink + write.
 
 This module is the single place in rules_py that declares the files making
-up a Python venv. Both `py_binary` / `py_test` (each with its own internal
-venv, unless `expose_venv = True` routes them to a sibling py_venv) and
-the standalone `py_venv` rule call `assemble_venv` to keep their layouts
-bit-identical.
+up a Python venv. Standalone and exposed venvs project a physical
+site-packages layout for filesystem consumers. Safe internal venvs import
+complete wheel roots directly, avoiding per-top-level symlink actions.
 
 The venv shape mirrors what CPython's `python -m venv` + pip install
 produces, so downstream tools (IDEs, `$VIRTUAL_ENV`-aware shells,
@@ -58,7 +57,9 @@ def assemble_venv(
         virtualenv_shim_py,
         site_merge_script_py,
         console_script_tmpl,
-        venv_name):
+        venv_name,
+        physical_layout,
+        wheel_imports_py):
     """Declare every file + symlink that makes up a venv for a target.
 
     Args:
@@ -90,6 +91,8 @@ def assemble_venv(
       console_script_tmpl: File — the console-script wrapper template
         (usually `ctx.file._console_script_tmpl`).
       venv_name: str — the venv dir basename (e.g. "." + safe_name).
+      physical_layout: Whether wheel entries must be projected into this venv.
+      wheel_imports_py: File — site helper that resolves compact wheel roots.
 
     Returns:
       struct with:
@@ -101,8 +104,9 @@ def assemble_venv(
 
     wheels_depset = _py_library.make_wheels_depset(ctx)
     wheels = wheels_depset.to_list()
-    top_level_to_site_pkgs, fully_covered_site_pkgs, console_scripts_map, merge_groups, collisions = resolve_wheel_collisions(ctx, wheels)
+    top_level_to_site_pkgs, fully_covered_site_pkgs, console_scripts_map, merge_groups, collisions, requires_physical_layout = resolve_wheel_collisions(ctx, wheels)
     enforce_collision_policy(collisions, package_collisions)
+    physical_layout = physical_layout or requires_physical_layout
 
     # All toolchain-derived path/flag math (runfiles escape arithmetic,
     # wheel/venv lib-dir names, pyvenv.cfg home, versioned python names,
@@ -139,11 +143,11 @@ def assemble_venv(
     # rules_python pip wheels (both stage content at their rfpath).
     # `/`-joined top-levels (merged namespace packages, e.g.
     # `jaraco/functools`) need one extra `..` per segment.
-    # This loop runs per (binary x top-level); build the target paths from
-    # a cached per-wheel prefix rather than formatting every component.
+    # Exposed and conflicted venvs need this physical projection. Safe private
+    # venvs import complete wheel roots instead, avoiding per-top-level actions.
     site_packages_prefix = site_packages_rel + "/"
     target_prefix_by_sp = {}
-    for tl, wheel_site_pkgs in top_level_to_site_pkgs.items():
+    for tl, wheel_site_pkgs in top_level_to_site_pkgs.items() if physical_layout else []:
         out = ctx.actions.declare_symlink(site_packages_prefix + tl)
         target_prefix = target_prefix_by_sp.get(wheel_site_pkgs)
         if target_prefix == None:
@@ -239,15 +243,37 @@ def assemble_venv(
             )
         return "{}/{}".format(escape, imp)
 
+    wheel_site_packages = {}
+    ordered_wheel_import_roots = []
+    for index in range(len(wheels) - 1, -1, -1):
+        site_packages = wheels[index].site_packages_rfpath
+        if site_packages not in wheel_site_packages:
+            wheel_site_packages[site_packages] = True
+            ordered_wheel_import_roots.append(site_packages)
+
+    def _format_wheel_imp(imp):
+        return ("import _aspect_rules_py_wheel_imports; " +
+                "_aspect_rules_py_wheel_imports.add(\"{}\", \"{}\")").format(
+            imp,
+            venv_to_runfiles_escape,
+        )
+
+    def _format_pth_imp(imp):
+        if not physical_layout and imp in wheel_site_packages:
+            return None
+        return _format_imp(imp)
+
     pth_lines = ctx.actions.args()
     pth_lines.use_param_file("%s", use_always = True)
     pth_lines.set_param_file_format("multiline")
     pth_lines.add(escape)
 
-    # allow_closure lets _format_imp capture fully_covered_site_pkgs /
-    # known_layout_site_pkgs so we don't have to materialise imports_depset
-    # via .to_list().
-    pth_lines.add_all(imports_depset, map_each = _format_imp, allow_closure = True)
+    # Reverse postorder preserves last-wheel-wins precedence on sys.path.
+    # Compact roots are known and `.pth`-free; all other layouts continue
+    # using the existing physical projection and batched fallback.
+    if not physical_layout:
+        pth_lines.add_all(ordered_wheel_import_roots, map_each = _format_wheel_imp, allow_closure = True)
+    pth_lines.add_all(imports_depset, map_each = _format_pth_imp, allow_closure = True)
 
     site_packages_pth_file = ctx.actions.declare_file(
         "{}/{}.pth".format(site_packages_rel, safe_name),
@@ -257,6 +283,17 @@ def assemble_venv(
         content = pth_lines,
     )
     declared.append(site_packages_pth_file)
+
+    if not physical_layout:
+        wheel_imports_out = ctx.actions.declare_file(
+            "{}/_aspect_rules_py_wheel_imports.py".format(site_packages_rel),
+        )
+        ctx.actions.expand_template(
+            template = wheel_imports_py,
+            output = wheel_imports_out,
+            substitutions = {},
+        )
+        declared.append(wheel_imports_out)
 
     pyvenv_cfg = ctx.actions.declare_file("{}/pyvenv.cfg".format(venv_name))
     home_line = "home =\n" if tc.pyvenv_home == "" else "home = {}\n".format(tc.pyvenv_home)

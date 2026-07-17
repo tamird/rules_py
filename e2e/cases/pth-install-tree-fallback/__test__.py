@@ -8,8 +8,11 @@ exercising both wheels at runtime.
 import apkg
 import bpkg
 import shared
+import sys
 
 assert apkg.VALUE == "apkg"
 assert bpkg.VALUE == "bpkg"
 # One of the two `shared` contributors wins; we only care that it resolves.
 assert shared.OWNER in ("a", "b")
+assert "rules_py_itf_sentinel_b" in sys.path
+assert "rules_py_itf_sentinel_a" not in sys.path
