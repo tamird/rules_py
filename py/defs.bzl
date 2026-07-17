@@ -13,6 +13,7 @@ python.toolchain(python_version = "3.9", is_default = True)
 ```
 """
 
+load("//py/private:providers.bzl", _PyWheelsInfo = "PyWheelsInfo")
 load(
     "//py/private:py_image_layer.bzl",
     _PyLayerTierInfo = "PyLayerTierInfo",
@@ -57,6 +58,7 @@ PyLayerTierInfo = _PyLayerTierInfo
 
 # The PyInfo provider used by rules_py
 PyInfo = _PyInfo
+PyWheelsInfo = _PyWheelsInfo
 RulesPythonPyInfo = _RulesPythonPyInfo
 get_py_info = _get_py_info
 has_py_info = _has_py_info
